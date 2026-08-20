@@ -9,7 +9,7 @@ description: Create or revise durable repository-backed project specifications a
 
 This skill is planning-only. Do not modify production code, implement tasks, commit, push, deploy, or invoke the execute skill in this turn. After presenting the plan confirmation request, end the turn immediately.
 
-Read [workflow-protocol.md](../../references/workflow-protocol.md) and [execution-checklists.md](../../references/execution-checklists.md) completely before writing the plan.
+Read [workflow-protocol.md](../../references/workflow-protocol.md), [execution-checklists.md](../../references/execution-checklists.md), and [multi-agent-orchestration.md](../../references/multi-agent-orchestration.md) completely before writing the plan.
 
 ## Inspect
 
@@ -48,6 +48,25 @@ python3 <plugin-root>/scripts/workflow_state.py init <plan-path> --plan-id <plan
 
 For a revision, increment `revision`, clear all approval fields, and return `phase` to `AWAITING_CONFIRMATION`.
 
+## Choose Execution Mode
+
+Choose and persist one execution mode before asking for approval:
+
+- `SINGLE_AGENT`: use when the user requests it, fewer than two tasks are safely agent-eligible, write scopes overlap, requirements are unsettled, or coordination cost exceeds the likely benefit.
+- `AUTO_MULTI_AGENT`: the default multi-agent mode when at least two dependency-ready tasks have disjoint literal write scopes and parallel execution has a material benefit.
+- `MANUAL_MULTI_AGENT`: use only when the user explicitly specifies agent assignments or asks to control the topology.
+
+Add these plan frontmatter fields:
+
+```yaml
+execution_mode: AUTO_MULTI_AGENT
+max_workers: 3
+agent_topology: coordinator-workers
+orchestration_state: docs/plan/<plan-id>.orchestration.json
+```
+
+Choose a conservative `max_workers`; the coordinator also consumes a runtime collaboration slot. In `SINGLE_AGENT`, set `max_workers: 1`, omit `orchestration_state`, and use `agent_topology: coordinator-only`. Treat legacy plans without these fields as `SINGLE_AGENT`.
+
 ## Plan Tasks
 
 Break implementation into dependency-aware, commit-sized tasks. For every task record:
@@ -56,8 +75,19 @@ Break implementation into dependency-aware, commit-sized tasks. For every task r
 - goal, scope, exclusions, prerequisites, risks;
 - observable acceptance criteria;
 - exact validation commands where known;
-- owner only when multi-agent execution is explicitly allowed;
+- dependencies (`Depends-On`) and a literal repository-relative `Write-Scope` without globs;
+- `Agent-Eligible`, `Parallel-Group`, and `Planned-Owner` metadata where applicable;
 - evidence placeholder.
+
+Keep canonical workflow documents, shared manifests, migrations, generated lockfiles, broad integration edits, and Git operations coordinator-owned unless their ownership is isolated beyond doubt.
+
+For `AUTO_MULTI_AGENT` and `MANUAL_MULTI_AGENT`, create the companion orchestration JSON described by the shared protocol. Include every plan task, set `max_attempts: 2` unless risk requires a lower value, and validate it before requesting approval:
+
+```bash
+python3 <plugin-root>/scripts/orchestration_state.py validate <state-path> --plan <plan-path>
+```
+
+Do not create an orchestration JSON for `SINGLE_AGENT`.
 
 Copy applicable quality checklist items into the plan so execution does not depend on this plugin remaining installed.
 
@@ -66,6 +96,8 @@ Record commit and push authorization separately. Both default to not authorized.
 ## Confirmation Boundary
 
 The initial request cannot approve a plan that has not yet been created. Expressions such as "直接完成", "一口气做完", "go ahead", or "finish it" are not approval of a newly generated plan.
+
+Summarize the chosen execution mode, topology, worker cap, parallel waves, coordinator-owned tasks, and fallback behavior. Approval of this plan authorizes only the recorded in-scope native-agent delegation; it does not authorize commit, push, deployment, destructive actions, or scope expansion.
 
 End with links to the durable design and plan and this intent:
 

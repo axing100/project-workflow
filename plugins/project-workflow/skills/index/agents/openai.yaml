@@ -1,6 +1,6 @@
 interface:
   display_name: "Project Workflow"
-  short_description: "Plan and execute complex projects with approval gates"
-  default_prompt: "Use $index to plan and execute this complex project with a confirmation gate."
+  short_description: "Approve plans and schedule native agents safely"
+  default_prompt: "Use $index to plan this complex project, wait for approval, then actively schedule safe native Codex agents."
 policy:
   allow_implicit_invocation: true

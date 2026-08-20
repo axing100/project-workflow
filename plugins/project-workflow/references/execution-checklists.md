@@ -9,6 +9,12 @@ Use these as mandatory quality gates for non-trivial work. Copy applicable items
 
 - Status: [ ] / [~] / [x] / [!]
 - Owner: agent or person; omit only for single-agent work
+- Depends-On: task IDs or `none`
+- Write-Scope: exact non-overlapping paths or areas
+- Agent-Eligible: true / false
+- Parallel-Group: optional wave hint
+- Planned-Owner: required for agent-eligible MANUAL mode tasks
+- Assignment-Kind: runtime `WORKER` or `COORDINATOR`; empty before assignment
 - Goal: expected behavior and reason
 - Scope: expected modules and paths
 - Out of scope: explicit exclusions
@@ -31,6 +37,8 @@ Use these as mandatory quality gates for non-trivial work. Copy applicable items
 - [ ] Historical failures and environmental limitations are recorded separately from expected new results.
 - [ ] Commit and push authorization states are recorded separately; both default to not authorized.
 - [ ] Design and plan cross-link each other and the user confirmation is recorded.
+- [ ] Execution mode, topology, worker limit, delegation authorization, and fallback behavior are explicit.
+- [ ] Multi-agent tasks have machine-readable dependencies, write scopes, eligibility, and matching companion state.
 
 ## Per-Task Development
 
@@ -44,6 +52,7 @@ Use these as mandatory quality gates for non-trivial work. Copy applicable items
 - [ ] Add comments only for non-obvious behavior or domain decisions.
 - [ ] Review the diff for correctness, accidental changes, secrets, generated artifacts, and maintainability.
 - [ ] Do not commit or push unless the plan records the corresponding explicit authorization and scope.
+- [ ] Workers never edit canonical plan, orchestration state, delivery records, or coordinator-only paths.
 
 ## Per-Task Test and Acceptance
 
@@ -70,6 +79,7 @@ Use these as mandatory quality gates for non-trivial work. Copy applicable items
 - [ ] All tasks have a terminal state and no unexplained `[~]` item remains.
 - [ ] Full regression or the closest feasible substitute was run and recorded.
 - [ ] Integration across tasks and agents was reviewed and tested.
+- [ ] Runtime workers, companion state, task evidence, and final Git state were reconciled.
 - [ ] Final review covers correctness, regression, security, performance, operability, and maintainability.
 - [ ] Delivery documentation lists behavior changes, files, tests, configuration, migrations, deployment order, rollback, and skipped checks.
 - [ ] Design, plan, delivery report, Git state, and actual implementation agree.

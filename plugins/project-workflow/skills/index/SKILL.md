@@ -1,13 +1,33 @@
 ---
 name: index
-description: Route complex or multi-step software project work through a durable plan, explicit user approval, and confirmed execution. Use for broad engineering changes, architecture work, migrations, cross-module work, long-running implementation, requests to create or revise an implementation plan, approval of a persisted plan, or resuming an interrupted planned project. Do not use for trivial localized edits that do not justify durable project records.
+description: Use an approval-gated, repository-persisted workflow with optional active native-agent scheduling only when the user explicitly invokes Project Workflow, approves or resumes an existing Project Workflow plan, or requests a materially complex software change involving architecture, migrations, multiple modules or services, staged rollout, compatibility, rollback, security-sensitive behavior, or long-running coordinated implementation. Do not use for routine localized edits, small bug fixes, ordinary CRUD, mechanical refactors, documentation, tests, formatting, or requests that merely involve several steps or ask for a lightweight plan.
 ---
 
 # Project Workflow Router
 
-## Critical Ownership
+## Admission Gate
 
-Own project planning, approval, phase transitions, execution coordination, and delivery state once this workflow starts. Allow other skills to provide specialized capabilities, but do not let them skip approval, change the active phase, or start implementation early.
+Accept this workflow when any condition is true:
+
+1. The user explicitly invokes Project Workflow by name, invokes `$project-workflow:index`, or asks for its durable approval-gated workflow.
+2. The user approves, revises, or resumes an existing persisted Project Workflow plan.
+3. The task has at least one hard trigger:
+   - architecture or public contract change;
+   - database, data, infrastructure, or deployment migration;
+   - security, authorization, payment, privacy, or data-loss risk;
+   - staged rollout, compatibility, backfill, or rollback requirements.
+4. The task has at least two complexity signals:
+   - spans multiple modules, services, or repositories;
+   - requires meaningful design tradeoffs or coordination across boundaries;
+   - has multiple independently verifiable deliverables;
+   - is likely to span multiple tasks, sessions, or handoffs;
+   - requires durable audit, acceptance, recovery, or delivery records.
+
+Do not accept merely because a task has several implementation steps or the user requests a lightweight plan. When none of the conditions applies, continue with the normal lightweight engineering workflow without creating workflow documents or state. When uncertain, default to not using this workflow; do not ask the user whether a routine task is complex solely to decide whether to activate it.
+
+## Accepted Workflow Ownership
+
+Only after the admission gate accepts the task, own project planning, approval, phase transitions, native-agent scheduling, execution coordination, and delivery state. Allow other skills to provide specialized capabilities, but do not let them skip approval, change the active phase, start implementation early, or independently create a competing agent topology.
 
 Read [workflow-protocol.md](../../references/workflow-protocol.md) before routing. Load exactly one focused skill for the current turn. Do not perform the focused skill's work in this router.
 
@@ -21,7 +41,6 @@ Read [workflow-protocol.md](../../references/workflow-protocol.md) before routin
 2. Route to [execute](../execute/SKILL.md) only when:
    - the current user message explicitly approves a named or clearly identified persisted plan; or
    - a persisted plan already contains a valid approval record and the user asks to resume or continue it.
-3. Keep the normal lightweight engineering workflow for a trivial, localized change. State the reason briefly. Do not use this exception for cross-module, migration, security-sensitive, architecture, or long-running work.
 
 ## Explicit Skip
 
