@@ -2,7 +2,7 @@
 workflow: "project-workflow/v1"
 plan_id: "project-workflow-github-public-release"
 revision: 1
-phase: "IN_PROGRESS"
+phase: "COMPLETED"
 approved_revision: 1
 approved_at: "2026-08-20T05:43:37+00:00"
 confirmation_record: "同意，开始执行"
@@ -89,42 +89,42 @@ confirmation_record: "同意，开始执行"
 
 ### T04 创建初始提交并发布公开仓库
 
-- 状态：[~]
+- 状态：[x]
 - 目标：创建公开 GitHub 仓库并推送经过验证的 `main`。
 - 范围：当前仓库全部预期交付文件、Git 初始提交、`origin/main`。
 - 范围外：Tag、Release、强制推送和其他远程。
 - 前置条件：T03。
 - 风险：误提交敏感信息或推送到错误目标。
 - 验收标准：
-  - [ ] 敏感信息与生成物检查无命中。
-  - [ ] 初始提交只包含预期文件。
-  - [ ] `origin` 精确指向 `https://github.com/axing100/project-workflow.git`。
-  - [ ] 远程仓库为 Public，`main` 推送成功。
+  - [x] 敏感信息与生成物检查无命中。
+  - [x] 初始提交只包含预期文件。
+  - [x] `origin` 精确指向 `https://github.com/axing100/project-workflow.git`。
+  - [x] 远程仓库为 Public，`main` 推送成功。
 - 验证：
-  - [ ] `git status --short` — 提交前范围已审查，提交后为空。
-  - [ ] `git remote get-url origin` — 精确匹配目标。
-  - [ ] `git rev-parse HEAD` 与 `git ls-remote origin refs/heads/main` — SHA 一致。
-  - [ ] `gh repo view axing100/project-workflow --json isPrivate,url` — `isPrivate=false`。
-- 证据：待执行。
+  - [x] `git status --short` — 提交前范围已审查，提交后为空。
+  - [x] `git remote get-url origin` — 精确匹配目标。
+  - [x] `git rev-parse HEAD` 与 `git ls-remote origin refs/heads/main` — SHA 一致。
+  - [x] `gh repo view axing100/project-workflow --json isPrivate,url` — `isPrivate=false`。
+- 证据：公开仓库创建成功；本地和远程初始 SHA 均为 `e819269704a1da09dfdf732f0216f34b3bbdc0de`；默认分支为 `main`。
 
 ### T05 刷新本机插件并交付
 
-- 状态：[ ]
+- 状态：[x]
 - 目标：让本机 Codex 获取更新版本，并记录公开地址和回滚方式。
 - 范围：插件 cachebuster、本机重新安装、交付报告、计划状态。
 - 范围外：修改已推送的公开版本为本机 cachebuster。
 - 前置条件：T04。
 - 风险：本地缓存仍指向旧版本，或 cachebuster 意外进入远程提交。
 - 验收标准：
-  - [ ] 使用官方辅助脚本生成单个本机 cachebuster 并重新安装。
-  - [ ] 安装后源码 manifest 恢复为公开提交的 `0.2.0`。
-  - [ ] Git 工作树保持干净，远程不包含本机 cachebuster。
-  - [ ] 交付报告包含 GitHub URL、提交 SHA、测试和安装结果。
+  - [x] 使用官方辅助脚本生成单个本机 cachebuster 并重新安装。
+  - [x] 安装后源码 manifest 恢复为公开提交的 `0.2.0`。
+  - [x] Git 工作树保持干净，远程不包含本机 cachebuster。
+  - [x] 交付报告包含 GitHub URL、提交 SHA、测试和安装结果。
 - 验证：
-  - [ ] `codex plugin list` — 插件为 `installed, enabled`。
-  - [ ] `git status --short` — 为空。
-  - [ ] `git diff origin/main...HEAD` — 无差异。
-- 证据：待执行。
+  - [x] `codex plugin list` — 插件为 `installed, enabled`。
+  - [x] `git status --short` — 源码恢复后为空。
+  - [x] `git diff origin/main...HEAD` — 交付文档写入前无差异。
+- 证据：本机安装缓存版本为 `0.2.0+codex.20260820054922`；源码 manifest 已恢复为 `0.2.0`；交付报告已生成。
 
 ## 三、测试与质量清单
 
@@ -142,9 +142,9 @@ confirmation_record: "同意，开始执行"
 - [x] 重读已确认设计、计划和适用规则。
 - [x] 一次只有一个任务处于 `[~]`。
 - [x] 保留无关用户文件，不执行强制推送。
-- [ ] 提交前检查凭据、绝对路径、生成物和文件范围。
+- [x] 提交前检查凭据、绝对路径、生成物和文件范围。
 - [x] 先运行单元测试和 validator，再提交和推送。
-- [ ] 公开仓库状态、远程 SHA、本地 Git 和交付报告一致。
+- [x] 公开仓库状态、远程 SHA、本地 Git 和交付报告一致。
 
 ## 四、确认记录
 
