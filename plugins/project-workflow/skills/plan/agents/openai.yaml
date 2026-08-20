@@ -1,0 +1,6 @@
+interface:
+  display_name: "Project Workflow Plan"
+  short_description: "Create durable project plans and wait for approval"
+  default_prompt: "Use $plan to create a durable design and implementation plan, then wait for confirmation."
+policy:
+  allow_implicit_invocation: false

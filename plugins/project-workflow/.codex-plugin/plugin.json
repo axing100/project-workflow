@@ -1,0 +1,23 @@
+{
+  "name": "project-workflow",
+  "version": "0.2.0",
+  "description": "Plan complex software projects, wait for explicit approval, then execute the confirmed plan with durable state and validation.",
+  "author": {
+    "name": "chenjiaxing"
+  },
+  "homepage": "https://github.com/axing100/project-workflow",
+  "repository": "https://github.com/axing100/project-workflow",
+  "license": "Apache-2.0",
+  "keywords": ["codex", "workflow", "planning", "approval-gate", "project-management"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Project Workflow",
+    "shortDescription": "Plan first, require approval, then execute safely.",
+    "longDescription": "A durable project workflow for complex software changes. It separates planning from execution, requires explicit user approval, validates persisted workflow state, and records test and delivery evidence.",
+    "developerName": "chenjiaxing",
+    "category": "Productivity",
+    "capabilities": ["Planning", "Workflow", "Write"],
+    "websiteURL": "https://github.com/axing100/project-workflow",
+    "defaultPrompt": "Use Project Workflow to plan this complex software change, wait for my approval, and then execute the confirmed plan."
+  }
+}

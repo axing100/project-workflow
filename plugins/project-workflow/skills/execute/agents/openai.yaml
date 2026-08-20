@@ -1,0 +1,6 @@
+interface:
+  display_name: "Project Workflow Execute"
+  short_description: "Validate and execute an approved project plan safely"
+  default_prompt: "Use $execute to validate and execute the confirmed project plan."
+policy:
+  allow_implicit_invocation: false
