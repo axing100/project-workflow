@@ -45,7 +45,8 @@ Plans may add these orchestration fields:
 execution_mode: "AUTO_MULTI_AGENT"
 max_workers: 3
 agent_topology: "SHARED_WORKSPACE"
-orchestration_state: "docs/plan/NNN-task.orchestration.json"
+progress_reporting: "COMPACT"
+orchestration_state: ".codex/project-workflow/stable-project-plan-id/orchestration.json"
 ```
 
 Supported execution modes are:
@@ -53,6 +54,10 @@ Supported execution modes are:
 - `AUTO_MULTI_AGENT`: the coordinator may proactively create native runtime workers after plan approval;
 - `SINGLE_AGENT`: keep all implementation in the coordinator;
 - `MANUAL_MULTI_AGENT`: delegate only tasks whose worker assignments are explicitly recorded in the approved plan.
+
+New plans store `orchestration_state` under `.codex/project-workflow/<plan-id>/orchestration.json`. The file is plugin-owned internal recovery state, not a user-facing plan artifact and not something the user must review or edit. Existing plans that reference `docs/plan/*.orchestration.json` remain compatible.
+
+New plans default `progress_reporting` to `COMPACT`, where native agent UI carries worker status and the main task reports aggregate start, actionable exceptions, and completion. `DETAILED` is opt-in for debugging. Legacy plans without this field default to `COMPACT`.
 
 Plans without orchestration fields remain compatible and default to `SINGLE_AGENT`. `max_workers` counts workers only; the coordinator also consumes a runtime slot. The companion state file uses `project-workflow/orchestration/v1` and must match the plan ID and revision before delegation.
 

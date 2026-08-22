@@ -47,9 +47,11 @@ APPROVED / IN_PROGRESS
 - `AUTO_MULTI_AGENT`：默认多智能体模式；存在至少两个安全、互不冲突的就绪任务时，主动创建 Codex 原生子智能体。
 - `MANUAL_MULTI_AGENT`：仅在用户明确指定分工或拓扑时使用。
 
-规划会记录任务 DAG、字面量写入范围、Worker 上限和降级策略，并在多智能体模式下生成 companion JSON。用户确认计划后，即授权计划范围内的原生子智能体委派，无需逐个任务重复确认；提交、推送、部署、破坏性操作等权限仍需单独授权。
+规划会记录任务 DAG、字面量写入范围、Worker 上限和降级策略。多智能体模式使用 `.codex/project-workflow/<plan-id>/orchestration.json` 保存插件内部恢复状态；它不是需要用户阅读或编辑的计划文档。用户确认计划后，即授权计划范围内的原生子智能体委派，无需逐个任务重复确认；提交、推送、部署、破坏性操作等权限仍需单独授权。
 
-子智能体由当前 Codex 任务的原生协作能力创建，因此可在软件的智能体 UI 中展示。若当前运行时没有该能力或没有空闲槽位，插件会记录原因并在安全时由协调者串行接管；插件不会用后台 shell、模型 API 或独立用户任务伪造子智能体。
+子智能体由当前 Codex 任务的原生协作能力创建，因此可在软件的智能体 UI 中展示。插件先预留任务，原生创建成功并返回 Agent ID 后才把任务标记为 Worker；完成时还必须校验同一 Agent ID。若当前运行时没有该能力或没有空闲槽位，插件会记录并播报原因，再由协调者安全地串行接管；插件不会用后台 shell、模型 API、独立用户任务或单纯的 JSON 记录伪造子智能体。
+
+执行过程默认使用精简进度：主会话只汇总一次波次启动，单个子智能体状态交给 Codex 原生 UI 展示；仅在重试、回退、阻塞等可操作异常以及最终完成时补充说明。调试级生命周期输出需要显式开启。
 
 ## 环境要求
 
@@ -105,6 +107,9 @@ python3 plugins/project-workflow/scripts/workflow_state.py check-execute <plan.m
 python3 plugins/project-workflow/scripts/workflow_state.py transition <plan.md> IN_PROGRESS
 python3 plugins/project-workflow/scripts/orchestration_state.py validate <state.json> --plan <plan.md>
 python3 plugins/project-workflow/scripts/orchestration_state.py ready <state.json> --plan <plan.md> --agent-only
+python3 plugins/project-workflow/scripts/orchestration_state.py assign <state.json> <task-id> --plan <plan.md> --owner <task-name>
+python3 plugins/project-workflow/scripts/orchestration_state.py activate <state.json> <task-id> --plan <plan.md> --runtime-agent-id <agent-id> --runtime-task-name <canonical-task-name>
+python3 plugins/project-workflow/scripts/orchestration_state.py complete <state.json> <task-id> --plan <plan.md> --runtime-agent-id <agent-id> --evidence <evidence>
 python3 plugins/project-workflow/scripts/orchestration_state.py inspect <state.json> --plan <plan.md>
 ```
 

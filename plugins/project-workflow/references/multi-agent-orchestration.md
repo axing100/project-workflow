@@ -8,7 +8,7 @@ Use these rules for multiple Codex instances, subagents, or other coding agents.
 - `SINGLE_AGENT`: never create workers for this plan.
 - `MANUAL_MULTI_AGENT`: create only the workers and assignments explicitly named in the approved plan.
 
-Use native Codex subagent or collaboration tools so the host can expose its normal agent UI and lifecycle. Do not simulate native workers with shell processes, direct API calls, background scripts, or user-owned threads. If native tools are unavailable, record the limitation and fall back to `SINGLE_AGENT`.
+Use native Codex subagent or collaboration tools so the host can expose its normal agent UI and lifecycle. Do not simulate native workers with shell processes, direct API calls, background scripts, or user-owned threads. If native tools are unavailable, record the limitation, tell the user that the affected task is falling back to coordinator execution, and fall back to `SINGLE_AGENT`.
 
 ## Activation and Topology
 
@@ -22,11 +22,13 @@ Use native Codex subagent or collaboration tools so the host can expose its norm
 
 ## Durable Task State
 
-Use a companion `project-workflow/orchestration/v1` JSON document for multi-agent plans. Every task records:
+Use a companion `project-workflow/orchestration/v1` JSON document for multi-agent plans. Store new state at `.codex/project-workflow/<plan-id>/orchestration.json`; it is internal plugin state rather than a user-facing plan artifact. Create and mutate it only through the bundled helper so it does not appear as a normal edited deliverable. Existing plan-linked state paths remain readable. Every task records:
 
 - `id`, `status`, `depends_on`, `write_scope`, and `agent_eligible`;
 - `owner`, `assignment_kind`, `started_at`, `attempts`, `evidence`, and `block_reason`;
+- `runtime_agent_id`, `runtime_task_name`, `spawn_status`, `spawned_at`, `finished_at`, and `runtime_verification`;
 - optional `parallel_group`, `planned_owner`, and `branch_or_worktree`.
+- `display_name`, a short user-facing task label distinct from internal runtime identity.
 
 `MANUAL_MULTI_AGENT` tasks are agent-eligible only when `planned_owner` is non-empty. The runtime assignment must match it. The default `max_attempts` is 2 unless the approved plan records a smaller positive limit.
 
@@ -43,7 +45,7 @@ BLOCKED -> PENDING      (release after resolution)
 
 Use the bundled orchestration helper for validation and every state change. The Markdown plan remains the human-readable canonical plan; the companion JSON is the deterministic scheduler state and must use the same task IDs and revision.
 
-Use `assignment_kind=WORKER` for native subagents and `assignment_kind=COORDINATOR` for serial coordinator work. Worker assignments consume `max_workers`; coordinator assignments do not, but their write scopes still conflict with active workers.
+Use `assignment_kind=WORKER_PENDING` only for a reserved slot awaiting native spawn, `assignment_kind=WORKER` only after the native runtime returns an agent ID and canonical task name, and `assignment_kind=COORDINATOR` for serial coordinator work. Pending and active workers consume `max_workers`; coordinator assignments do not, but their write scopes still conflict with active workers. A worker cannot complete unless its handoff matches the bound runtime agent ID. Historical completed Worker records without runtime identity remain readable only as `runtime_verification=UNAVAILABLE`; never invent IDs for them.
 
 ## Scheduler Loop
 
@@ -52,12 +54,21 @@ Use `assignment_kind=WORKER` for native subagents and `assignment_kind=COORDINAT
 3. Query dependency-ready tasks from the state helper.
 4. Exclude tasks that are not agent-eligible, touch coordinator-only paths, or overlap an active write scope.
 5. Compute worker count as the minimum of the approved `max_workers`, available runtime worker slots, and safe ready tasks.
-6. Persist each assignment before creating its worker. If creation fails, release the assignment immediately.
-7. Wait for worker handoffs while continuing only non-conflicting coordinator work.
-8. Inspect the handoff, diff, tests, and actual write scope before recording completion.
-9. Advance to the next wave until all tasks are completed or a genuine blocker remains.
+6. In compact mode, announce the wave once using `display_name` labels; do not expose internal worker names or scopes unless they affect the user.
+7. Persist a `WORKER_PENDING` reservation, call the native spawn capability, then bind its returned agent ID and canonical task name with `activate` before treating it as a Worker.
+8. If creation fails, release with `--spawn-failed`, announce the failure and fallback, and do not record a fake Worker.
+9. Let the native agent UI expose each successful worker start; do not duplicate per-worker start commentary in compact mode.
+10. Wait for worker handoffs while continuing only non-conflicting coordinator work; verify routine handoffs silently in compact mode.
+11. Inspect the runtime identity, handoff, diff, tests, and actual write scope before recording completion with the same agent ID.
+12. Announce retries, ownership changes, fallback, and blockers. Translate phase changes into plain-language aggregate progress only when they materially help the user, then advance until all tasks are completed or a genuine blocker remains.
 
 Do not create workers merely to fill capacity. Prefer serial execution when only one task is ready or coordination cost exceeds likely parallel benefit.
+
+## User-Facing Progress
+
+Default to `COMPACT`. The main task should normally contain one wave-start message, actionable exception messages when needed, occasional aggregate progress for long-running work, and one final synthesis. Native agent chips are the primary per-worker status surface.
+
+Do not expose raw workflow enums, canonical task paths such as `/root/...`, runtime agent IDs, plugin cache paths, internal JSON paths, or state-helper commands. Do not narrate transient states that may become stale before the message renders. Use `DETAILED` only when the user explicitly asks for workflow debugging.
 
 ## Branch and Worktree Naming
 
@@ -97,6 +108,7 @@ Do not create workers merely to fill capacity. Prefer serial execution when only
 - Single-agent mode permits exactly one `[~]` task.
 - Multi-agent mode permits at most one `[~]` task per active worker.
 - Every active task records `Owner`, `Started`, `Write scope`, and optional `Branch/Worktree`.
+- Every native Worker records the runtime agent ID and canonical task name returned by Codex. A reservation without them is `WORKER_PENDING`, never `WORKER`.
 - A worker completion report does not make a task `[x]`; the coordinator marks completion only after acceptance evidence and integration checks pass.
 - Use `[!]` only for a genuine blocker and include impact, attempts, owner, and required resolution.
 
@@ -133,7 +145,7 @@ Do not report the project complete merely because every worker returned. Complet
 
 ## Interruption, Failure, and Re-Planning
 
-- Worker creation failure: release the assignment and continue with fewer workers or serial execution.
+- Worker creation failure: release with a `spawn_failed` event, tell the user why, and continue with fewer workers or serial execution.
 - Missing worker after restart: inspect its write scope, then release or accept partial work explicitly.
 - Overlapping or unexpected writes: stop affected workers and resolve ownership before continuing.
 - Shared environment contention: serialize the affected wave.

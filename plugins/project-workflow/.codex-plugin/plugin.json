@@ -1,6 +1,6 @@
 {
   "name": "project-workflow",
-  "version": "0.3.0",
+  "version": "0.3.0+codex.20260821141024",
   "description": "Plan complex software projects, require approval, then actively schedule native Codex agents with durable state and validation.",
   "author": {
     "name": "chenjiaxing"
@@ -8,7 +8,13 @@
   "homepage": "https://github.com/axing100/project-workflow",
   "repository": "https://github.com/axing100/project-workflow",
   "license": "Apache-2.0",
-  "keywords": ["codex", "workflow", "planning", "approval-gate", "project-management"],
+  "keywords": [
+    "codex",
+    "workflow",
+    "planning",
+    "approval-gate",
+    "project-management"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Project Workflow",
@@ -16,7 +22,12 @@
     "longDescription": "A durable workflow for complex software changes. It separates planning from execution, requires explicit approval, actively schedules native Codex agents with persisted DAG and write-scope controls, and records validation and delivery evidence.",
     "developerName": "chenjiaxing",
     "category": "Productivity",
-    "capabilities": ["Planning", "Workflow", "Write", "Multi-agent orchestration"],
+    "capabilities": [
+      "Planning",
+      "Workflow",
+      "Write",
+      "Multi-agent orchestration"
+    ],
     "websiteURL": "https://github.com/axing100/project-workflow",
     "defaultPrompt": "Use Project Workflow to plan this complex software change, wait for my approval, then actively schedule safe native Codex agents for the confirmed plan."
   }

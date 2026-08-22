@@ -14,7 +14,8 @@ Use these as mandatory quality gates for non-trivial work. Copy applicable items
 - Agent-Eligible: true / false
 - Parallel-Group: optional wave hint
 - Planned-Owner: required for agent-eligible MANUAL mode tasks
-- Assignment-Kind: runtime `WORKER` or `COORDINATOR`; empty before assignment
+- Assignment-Kind: `WORKER_PENDING`, runtime-bound `WORKER`, or `COORDINATOR`; empty before assignment
+- Runtime-Agent: native agent ID and canonical task name; required only for runtime-bound Workers
 - Goal: expected behavior and reason
 - Scope: expected modules and paths
 - Out of scope: explicit exclusions
@@ -38,7 +39,7 @@ Use these as mandatory quality gates for non-trivial work. Copy applicable items
 - [ ] Commit and push authorization states are recorded separately; both default to not authorized.
 - [ ] Design and plan cross-link each other and the user confirmation is recorded.
 - [ ] Execution mode, topology, worker limit, delegation authorization, and fallback behavior are explicit.
-- [ ] Multi-agent tasks have machine-readable dependencies, write scopes, eligibility, and matching companion state.
+- [ ] Multi-agent tasks have machine-readable dependencies, write scopes, eligibility, and matching internal companion state under `.codex/project-workflow/`.
 
 ## Per-Task Development
 
@@ -53,6 +54,9 @@ Use these as mandatory quality gates for non-trivial work. Copy applicable items
 - [ ] Review the diff for correctness, accidental changes, secrets, generated artifacts, and maintainability.
 - [ ] Do not commit or push unless the plan records the corresponding explicit authorization and scope.
 - [ ] Workers never edit canonical plan, orchestration state, delivery records, or coordinator-only paths.
+- [ ] A native Worker is not reported as started until Codex returns and persists its runtime agent ID and canonical task name.
+- [ ] Compact progress uses one aggregate wave-start message, native worker UI, actionable exception messages, and one final synthesis without raw runtime identities or phase enums.
+- [ ] Detailed lifecycle output appears only when the user explicitly requested workflow debugging.
 
 ## Per-Task Test and Acceptance
 
@@ -80,6 +84,7 @@ Use these as mandatory quality gates for non-trivial work. Copy applicable items
 - [ ] Full regression or the closest feasible substitute was run and recorded.
 - [ ] Integration across tasks and agents was reviewed and tested.
 - [ ] Runtime workers, companion state, task evidence, and final Git state were reconciled.
+- [ ] Every newly completed Worker has `runtime_verification=VERIFIED`; historical `UNAVAILABLE` records are disclosed rather than reconstructed.
 - [ ] Final review covers correctness, regression, security, performance, operability, and maintainability.
 - [ ] Delivery documentation lists behavior changes, files, tests, configuration, migrations, deployment order, rollback, and skipped checks.
 - [ ] Design, plan, delivery report, Git state, and actual implementation agree.

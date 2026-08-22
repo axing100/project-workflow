@@ -50,6 +50,7 @@ class OrchestrationStateTest(unittest.TestCase):
         """Create a valid pending scheduler task."""
         return {
             "id": task_id,
+            "display_name": task_id,
             "status": "PENDING",
             "depends_on": dependencies,
             "write_scope": scopes,
@@ -63,6 +64,12 @@ class OrchestrationStateTest(unittest.TestCase):
             "planned_owner": "",
             "branch_or_worktree": "",
             "assignment_kind": "",
+            "runtime_agent_id": "",
+            "runtime_task_name": "",
+            "spawn_status": "",
+            "spawned_at": "",
+            "finished_at": "",
+            "runtime_verification": "",
         }
 
     def default_state(self) -> dict[str, object]:
@@ -124,18 +131,98 @@ class OrchestrationStateTest(unittest.TestCase):
             expected=expected,
         )
 
+    def activate_worker(self, task_id: str, owner: str) -> str:
+        """Reserve and bind one task to a deterministic native worker identity."""
+        runtime_agent_id = f"agent-{task_id.lower()}"
+        self.orchestration("assign", task_id, "--owner", owner)
+        self.orchestration(
+            "activate",
+            task_id,
+            "--runtime-agent-id",
+            runtime_agent_id,
+            "--runtime-task-name",
+            owner,
+        )
+        return runtime_agent_id
+
     def test_validate_and_ready_wave(self) -> None:
         """Return independent root tasks as the first safe wave."""
         self.orchestration("validate", "--require-approval")
         result = self.orchestration("ready", "--agent-only")
         self.assertEqual(["T01", "T02"], [item["id"] for item in json.loads(result.stdout)])
 
+    def test_init_creates_hidden_state_from_compact_tasks(self) -> None:
+        """Create scheduler JSON through the helper instead of a reviewed file edit."""
+        self.state.unlink()
+        self.plan.write_text(
+            self.plan.read_text(encoding="utf-8").replace(
+                "confirmation_record: \"I approve scheduler-test revision 1.\"\n---",
+                "confirmation_record: \"I approve scheduler-test revision 1.\"\n"
+                "execution_mode: \"AUTO_MULTI_AGENT\"\n"
+                "max_workers: 2\n"
+                "agent_topology: \"SHARED_WORKSPACE\"\n"
+                "---",
+            ),
+            encoding="utf-8",
+        )
+        first = {
+            "id": "T01",
+            "display_name": "Backend report",
+            "depends_on": [],
+            "write_scope": ["backend"],
+            "agent_eligible": True,
+        }
+        second = {
+            "id": "T02",
+            "display_name": "Frontend report",
+            "depends_on": [],
+            "write_scope": ["frontend"],
+            "agent_eligible": True,
+        }
+        self.run_command(
+            "init",
+            str(self.state),
+            "--plan",
+            str(self.plan),
+            "--task",
+            json.dumps(first),
+            "--task",
+            json.dumps(second),
+        )
+        state = self.read_state()
+        self.assertEqual("scheduler-test", state["plan_id"])
+        self.assertEqual(["Backend report", "Frontend report"], [
+            task["display_name"] for task in state["tasks"]
+        ])
+
+    def test_final_validation_accepts_completed_plan_only(self) -> None:
+        """Use a dedicated final gate without reopening execution mutations."""
+        state = self.default_state()
+        for task in state["tasks"]:
+            task["status"] = "COMPLETED"
+            task["evidence"] = ["accepted"]
+        self.write_state(state)
+        self.run_workflow("transition", str(self.plan), "COMPLETED")
+        self.orchestration("validate", "--final")
+        failure = self.orchestration("validate", "--require-approval", expected=2)
+        self.assertIn("found COMPLETED", failure.stderr)
+
+    def test_final_validation_rejects_incomplete_tasks(self) -> None:
+        """Require scheduler completion evidence at the final lifecycle gate."""
+        self.run_workflow("transition", str(self.plan), "COMPLETED")
+        failure = self.orchestration("validate", "--final", expected=2)
+        self.assertIn("requires completed tasks", failure.stderr)
+
     def test_assignment_completion_unlocks_dependency(self) -> None:
         """Complete root tasks before returning their dependent task."""
-        self.orchestration("assign", "T01", "--owner", "worker-a")
-        self.orchestration("assign", "T02", "--owner", "worker-b")
-        self.orchestration("complete", "T01", "--evidence", "tests passed")
-        self.orchestration("complete", "T02", "--evidence", "review passed")
+        agent_a = self.activate_worker("T01", "worker-a")
+        agent_b = self.activate_worker("T02", "worker-b")
+        self.orchestration(
+            "complete", "T01", "--evidence", "tests passed", "--runtime-agent-id", agent_a
+        )
+        self.orchestration(
+            "complete", "T02", "--evidence", "review passed", "--runtime-agent-id", agent_b
+        )
         result = self.orchestration("ready", "--agent-only")
         self.assertEqual(["T03"], [item["id"] for item in json.loads(result.stdout)])
 
@@ -164,6 +251,92 @@ class OrchestrationStateTest(unittest.TestCase):
         self.assertEqual("ASSIGNED", task["status"])
         self.assertEqual(2, task["attempts"])
         self.assertEqual("worker-b", task["owner"])
+
+    def test_worker_requires_native_runtime_activation(self) -> None:
+        """Do not treat a persisted reservation as a running or completed worker."""
+        self.orchestration("assign", "T01", "--owner", "worker-a")
+        task = self.read_state()["tasks"][0]
+        self.assertEqual("WORKER_PENDING", task["assignment_kind"])
+        self.assertEqual("PENDING", task["spawn_status"])
+        failure = self.orchestration(
+            "complete", "T01", "--evidence", "unverified", expected=2
+        )
+        self.assertIn("before native worker activation", failure.stderr)
+
+    def test_worker_completion_requires_matching_runtime_identity(self) -> None:
+        """Bind completion evidence to the native worker returned by Codex."""
+        runtime_agent_id = self.activate_worker("T01", "worker-a")
+        failure = self.orchestration(
+            "complete",
+            "T01",
+            "--evidence",
+            "tests passed",
+            "--runtime-agent-id",
+            "another-agent",
+            expected=2,
+        )
+        self.assertIn("matching runtime_agent_id", failure.stderr)
+        self.orchestration(
+            "complete",
+            "T01",
+            "--evidence",
+            "tests passed",
+            "--runtime-agent-id",
+            runtime_agent_id,
+        )
+        task = self.read_state()["tasks"][0]
+        self.assertEqual("COMPLETED", task["spawn_status"])
+        self.assertEqual("VERIFIED", task["runtime_verification"])
+        self.assertTrue(task["finished_at"])
+
+    def test_forged_active_worker_is_rejected(self) -> None:
+        """Reject WORKER state that has no native Codex runtime identity."""
+        state = self.default_state()
+        task = state["tasks"][0]
+        task.update(
+            {
+                "status": "ASSIGNED",
+                "owner": "worker-a",
+                "started_at": "2026-08-21T00:00:00+00:00",
+                "assignment_kind": "WORKER",
+            }
+        )
+        self.write_state(state)
+        failure = self.orchestration("validate", expected=2)
+        self.assertIn("requires native runtime identity", failure.stderr)
+
+    def test_spawn_failure_releases_reservation_with_event(self) -> None:
+        """Release a failed native spawn without leaving a fake worker assignment."""
+        self.orchestration("assign", "T01", "--owner", "worker-a")
+        self.orchestration(
+            "release",
+            "T01",
+            "--reason",
+            "native collaboration unavailable",
+            "--spawn-failed",
+        )
+        state = self.read_state()
+        self.assertEqual("PENDING", state["tasks"][0]["status"])
+        self.assertEqual("spawn_failed", state["events"][-1]["action"])
+        self.assertEqual("worker-a", state["events"][-1]["owner"])
+
+    def test_legacy_completed_worker_is_runtime_unavailable(self) -> None:
+        """Preserve historical worker claims without inventing native runtime IDs."""
+        state = self.default_state()
+        task = state["tasks"][0]
+        task.update(
+            {
+                "status": "COMPLETED",
+                "owner": "legacy-worker",
+                "started_at": "2026-08-20T00:00:00+00:00",
+                "assignment_kind": "WORKER",
+                "evidence": ["historical evidence"],
+            }
+        )
+        self.write_state(state)
+        result = self.run_command("inspect", str(self.state))
+        normalized = json.loads(result.stdout)
+        self.assertEqual("UNAVAILABLE", normalized["tasks"][0]["runtime_verification"])
 
     def test_block_and_release(self) -> None:
         """Persist a blocker and release it after resolution."""

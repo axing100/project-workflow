@@ -61,11 +61,14 @@ Add these plan frontmatter fields:
 ```yaml
 execution_mode: AUTO_MULTI_AGENT
 max_workers: 3
-agent_topology: coordinator-workers
-orchestration_state: docs/plan/<plan-id>.orchestration.json
+agent_topology: SHARED_WORKSPACE
+progress_reporting: COMPACT
+orchestration_state: .codex/project-workflow/<plan-id>/orchestration.json
 ```
 
 Choose a conservative `max_workers`; the coordinator also consumes a runtime collaboration slot. In `SINGLE_AGENT`, set `max_workers: 1`, omit `orchestration_state`, and use `agent_topology: coordinator-only`. Treat legacy plans without these fields as `SINGLE_AGENT`.
+
+Default `progress_reporting` to `COMPACT`. Use `DETAILED` only when the user explicitly asks for debug-level workflow output. In compact mode, use user-facing task labels and plain-language phases; do not show raw enum values, runtime agent IDs, canonical `/root/...` task names, plugin cache paths, or state-helper commands.
 
 ## Plan Tasks
 
@@ -81,9 +84,11 @@ Break implementation into dependency-aware, commit-sized tasks. For every task r
 
 Keep canonical workflow documents, shared manifests, migrations, generated lockfiles, broad integration edits, and Git operations coordinator-owned unless their ownership is isolated beyond doubt.
 
-For `AUTO_MULTI_AGENT` and `MANUAL_MULTI_AGENT`, create the companion orchestration JSON described by the shared protocol. Include every plan task, set `max_attempts: 2` unless risk requires a lower value, and validate it before requesting approval:
+For `AUTO_MULTI_AGENT` and `MANUAL_MULTI_AGENT`, create the plugin-owned companion orchestration JSON described by the shared protocol at `.codex/project-workflow/<plan-id>/orchestration.json`. Include every plan task, set `max_attempts: 2` unless risk requires a lower value, and validate it before requesting approval. Create and update this state only through `orchestration_state.py`; never use a normal file-edit operation for it, link it, or present it as a document the user needs to review:
 
 ```bash
+python3 <plugin-root>/scripts/orchestration_state.py init <state-path> --plan <plan-path> \
+  --task '{"id":"T01","display_name":"user-facing task name","depends_on":[],"write_scope":["literal/path"],"agent_eligible":true}'
 python3 <plugin-root>/scripts/orchestration_state.py validate <state-path> --plan <plan-path>
 ```
 
@@ -97,10 +102,10 @@ Record commit and push authorization separately. Both default to not authorized.
 
 The initial request cannot approve a plan that has not yet been created. Expressions such as "直接完成", "一口气做完", "go ahead", or "finish it" are not approval of a newly generated plan.
 
-Summarize the chosen execution mode, topology, worker cap, parallel waves, coordinator-owned tasks, and fallback behavior. Approval of this plan authorizes only the recorded in-scope native-agent delegation; it does not authorize commit, push, deployment, destructive actions, or scope expansion.
+Summarize the parallel tasks, worker cap, coordinator-owned tasks, and fallback behavior in plain language. Do not expose configuration enum names or the internal state path. Approval of this plan authorizes only the recorded in-scope native-agent delegation; it does not authorize commit, push, deployment, destructive actions, or scope expansion.
 
 End with links to the durable design and plan and this intent:
 
-`计划已制定完毕，请确认。确认后我将开始严格执行，执行过程中不会每步打扰您，仅在遇到阻塞或完成所有任务时汇报。`
+`计划已制定完毕，请确认。确认后将按计划执行；子智能体会显示在 Codex 原生界面中，主会话只汇报开始、异常和最终结果。`
 
 Then end the current turn immediately. Do not call implementation, build, test, deployment, or execution tools after that confirmation request.

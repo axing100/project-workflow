@@ -47,9 +47,11 @@ The bundled `workflow_state.py` helper validates required fields, revisions, app
 - `AUTO_MULTI_AGENT`: the default multi-agent mode; actively creates native Codex agents when at least two safe, non-conflicting tasks are ready.
 - `MANUAL_MULTI_AGENT`: used only when the user explicitly specifies assignments or topology.
 
-Planning records the task DAG, literal write scopes, worker cap, and fallback behavior, and creates a companion JSON in multi-agent modes. Approving the plan authorizes native-agent delegation only for the recorded scope, without repeated per-task approval. Commit, push, deployment, destructive actions, and other elevated operations remain separately authorized.
+Planning records the task DAG, literal write scopes, worker cap, and fallback behavior. Multi-agent modes keep plugin-owned recovery state at `.codex/project-workflow/<plan-id>/orchestration.json`; it is not a plan document that users need to review or edit. Approving the plan authorizes native-agent delegation only for the recorded scope, without repeated per-task approval. Commit, push, deployment, destructive actions, and other elevated operations remain separately authorized.
 
-Workers use native collaboration inside the current Codex task, so they can appear in the app's agent UI. If the runtime lacks that capability or has no free slots, the plugin records the reason and safely falls back to coordinator execution. It never simulates agents with background shells, direct model APIs, or separate user-owned tasks.
+Workers use native collaboration inside the current Codex task, so they can appear in the app's agent UI. The plugin reserves a task first and marks it as a Worker only after native spawn returns an agent ID; completion must match that same ID. If the runtime lacks that capability or has no free slots, the plugin records and reports the reason before safely falling back to coordinator execution. It never simulates agents with background shells, direct model APIs, separate user-owned tasks, or JSON-only worker claims.
+
+Execution defaults to compact progress: one aggregate wave-start message, native Codex agent UI for per-worker status, actionable retry/fallback or blocker messages, and one final synthesis. Debug-level lifecycle output is opt-in.
 
 ## Requirements
 
@@ -105,6 +107,9 @@ python3 plugins/project-workflow/scripts/workflow_state.py check-execute <plan.m
 python3 plugins/project-workflow/scripts/workflow_state.py transition <plan.md> IN_PROGRESS
 python3 plugins/project-workflow/scripts/orchestration_state.py validate <state.json> --plan <plan.md>
 python3 plugins/project-workflow/scripts/orchestration_state.py ready <state.json> --plan <plan.md> --agent-only
+python3 plugins/project-workflow/scripts/orchestration_state.py assign <state.json> <task-id> --plan <plan.md> --owner <task-name>
+python3 plugins/project-workflow/scripts/orchestration_state.py activate <state.json> <task-id> --plan <plan.md> --runtime-agent-id <agent-id> --runtime-task-name <canonical-task-name>
+python3 plugins/project-workflow/scripts/orchestration_state.py complete <state.json> <task-id> --plan <plan.md> --runtime-agent-id <agent-id> --evidence <evidence>
 python3 plugins/project-workflow/scripts/orchestration_state.py inspect <state.json> --plan <plan.md>
 ```
 

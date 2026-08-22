@@ -19,6 +19,9 @@ SCHEMA = "project-workflow/orchestration/v1"
 VALID_MODES = {"AUTO_MULTI_AGENT", "SINGLE_AGENT", "MANUAL_MULTI_AGENT"}
 VALID_TOPOLOGIES = {"SHARED_WORKSPACE", "ISOLATED_WORKTREE", "REMOTE_AGENT"}
 VALID_TASK_STATES = {"PENDING", "ASSIGNED", "COMPLETED", "BLOCKED"}
+VALID_ASSIGNMENT_KINDS = {"", "WORKER_PENDING", "WORKER", "COORDINATOR"}
+VALID_SPAWN_STATUSES = {"", "PENDING", "RUNNING", "COMPLETED", "UNKNOWN", "NOT_APPLICABLE"}
+VALID_RUNTIME_VERIFICATIONS = {"", "PENDING", "VERIFIED", "UNAVAILABLE", "NOT_APPLICABLE"}
 ROOT_FIELDS = (
     "schema",
     "plan_id",
@@ -173,23 +176,95 @@ def validate_task(task: Any, index: int) -> Dict[str, Any]:
     task["owner"] = owner
     task["started_at"] = started_at
     task["block_reason"] = block_reason
+    task.setdefault("display_name", task_id)
+    task["display_name"] = require_string(task["display_name"], f"{task_id}.display_name")
     task.setdefault("parallel_group", "")
     task.setdefault("planned_owner", "")
     task.setdefault("branch_or_worktree", "")
     task.setdefault("assignment_kind", "")
+    task.setdefault("runtime_agent_id", "")
+    task.setdefault("runtime_task_name", "")
+    task.setdefault("spawn_status", "")
+    task.setdefault("spawned_at", "")
+    task.setdefault("finished_at", "")
+    task.setdefault("runtime_verification", "")
     task["planned_owner"] = require_string(
         task["planned_owner"], f"{task_id}.planned_owner", allow_empty=True
     )
     assignment_kind = require_string(
         task["assignment_kind"], f"{task_id}.assignment_kind", allow_empty=True
     )
-    if assignment_kind not in {"", "WORKER", "COORDINATOR"}:
+    if assignment_kind not in VALID_ASSIGNMENT_KINDS:
         raise OrchestrationError(f"invalid assignment_kind for {task_id}: {assignment_kind}")
     task["assignment_kind"] = assignment_kind
+    for field in ("runtime_agent_id", "runtime_task_name", "spawned_at", "finished_at"):
+        task[field] = require_string(task[field], f"{task_id}.{field}", allow_empty=True)
+    spawn_status = require_string(task["spawn_status"], f"{task_id}.spawn_status", allow_empty=True)
+    if spawn_status not in VALID_SPAWN_STATUSES:
+        raise OrchestrationError(f"invalid spawn_status for {task_id}: {spawn_status}")
+    task["spawn_status"] = spawn_status
+    runtime_verification = require_string(
+        task["runtime_verification"], f"{task_id}.runtime_verification", allow_empty=True
+    )
+    if runtime_verification not in VALID_RUNTIME_VERIFICATIONS:
+        raise OrchestrationError(
+            f"invalid runtime_verification for {task_id}: {runtime_verification}"
+        )
+    task["runtime_verification"] = runtime_verification
     if status == "ASSIGNED" and not assignment_kind:
         raise OrchestrationError(f"assigned task {task_id} requires assignment_kind")
     if status == "PENDING" and assignment_kind:
         raise OrchestrationError(f"pending task {task_id} must not retain assignment_kind")
+    runtime_fields = (
+        task["runtime_agent_id"],
+        task["runtime_task_name"],
+        task["spawn_status"],
+        task["spawned_at"],
+        task["finished_at"],
+        task["runtime_verification"],
+    )
+    if status == "PENDING" and any(runtime_fields):
+        raise OrchestrationError(f"pending task {task_id} must not retain runtime fields")
+    if assignment_kind == "WORKER_PENDING":
+        if status != "ASSIGNED" or spawn_status != "PENDING":
+            raise OrchestrationError(
+                f"reserved worker task {task_id} must be ASSIGNED with spawn_status PENDING"
+            )
+        if task["runtime_agent_id"] or task["runtime_task_name"] or task["spawned_at"]:
+            raise OrchestrationError(f"reserved worker task {task_id} must not claim runtime identity")
+        if runtime_verification != "PENDING":
+            raise OrchestrationError(f"reserved worker task {task_id} requires PENDING verification")
+    if assignment_kind == "WORKER":
+        has_runtime_identity = bool(
+            task["runtime_agent_id"] and task["runtime_task_name"] and task["spawned_at"]
+        )
+        if status == "ASSIGNED":
+            if not has_runtime_identity:
+                raise OrchestrationError(
+                    f"active worker task {task_id} requires native runtime identity"
+                )
+            if spawn_status != "RUNNING" or runtime_verification != "VERIFIED":
+                raise OrchestrationError(
+                    f"active worker task {task_id} requires verified RUNNING runtime"
+                )
+        elif status == "COMPLETED" and not has_runtime_identity:
+            # Existing v1 records predate runtime binding. Preserve them without inventing IDs.
+            task["spawn_status"] = "UNKNOWN"
+            task["runtime_verification"] = "UNAVAILABLE"
+        elif status == "COMPLETED":
+            if not task["finished_at"] or spawn_status != "COMPLETED":
+                raise OrchestrationError(
+                    f"completed worker task {task_id} requires finished runtime evidence"
+                )
+            if runtime_verification != "VERIFIED":
+                raise OrchestrationError(
+                    f"completed worker task {task_id} requires VERIFIED runtime"
+                )
+    if assignment_kind == "COORDINATOR":
+        if task["runtime_agent_id"] or task["runtime_task_name"] or task["spawned_at"]:
+            raise OrchestrationError(f"coordinator task {task_id} must not claim worker runtime")
+        task["spawn_status"] = "NOT_APPLICABLE"
+        task["runtime_verification"] = "NOT_APPLICABLE"
     return task
 
 
@@ -260,7 +335,9 @@ def validate_state(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
                 )
 
     assigned = [task for task in tasks.values() if task["status"] == "ASSIGNED"]
-    assigned_workers = [task for task in assigned if task["assignment_kind"] == "WORKER"]
+    assigned_workers = [
+        task for task in assigned if task["assignment_kind"] in {"WORKER_PENDING", "WORKER"}
+    ]
     if len(assigned_workers) > state["max_workers"]:
         raise OrchestrationError("assigned worker count exceeds max_workers")
     owners: Set[str] = set()
@@ -276,8 +353,13 @@ def validate_state(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     return tasks
 
 
-def validate_plan(state: Dict[str, Any], plan: Path, require_approval: bool) -> None:
-    """Validate plan linkage and optionally its execution approval."""
+def validate_plan(
+    state: Dict[str, Any],
+    plan: Path,
+    require_approval: bool,
+    final: bool = False,
+) -> None:
+    """Validate plan linkage and the requested lifecycle gate."""
     metadata, _, _ = parse_document(plan)
     revision, phase = require_common(metadata)
     if state["plan_id"] != metadata["plan_id"]:
@@ -291,9 +373,13 @@ def validate_plan(state: Dict[str, Any], plan: Path, require_approval: bool) -> 
     ):
         if plan_field in metadata and metadata[plan_field] != state[state_field]:
             raise OrchestrationError(f"orchestration {state_field} does not match plan")
-    if require_approval:
+    if final:
+        if phase != "COMPLETED":
+            raise OrchestrationError(f"final validation requires completed plan, found {phase}")
+    elif require_approval:
         if phase not in {"APPROVED", "IN_PROGRESS"}:
             raise OrchestrationError(f"orchestration requires approved plan, found {phase}")
+    if require_approval or final:
         if metadata["approved_revision"] != revision:
             raise OrchestrationError("approved_revision does not match plan revision")
         if not str(metadata["approved_at"]).strip() or not str(metadata["confirmation_record"]).strip():
@@ -308,6 +394,8 @@ def append_event(state: Dict[str, Any], action: str, task: Dict[str, Any], detai
             "action": action,
             "task_id": task["id"],
             "owner": task["owner"],
+            "runtime_agent_id": task.get("runtime_agent_id", ""),
+            "runtime_task_name": task.get("runtime_task_name", ""),
             "detail": detail,
         }
     )
@@ -332,11 +420,100 @@ def command_inspect(args: argparse.Namespace) -> None:
     print(json.dumps(state, ensure_ascii=False, indent=2))
 
 
+def parse_initial_task(raw_task: str) -> Dict[str, Any]:
+    """Expand one compact task argument into normalized scheduler state."""
+    try:
+        supplied = json.loads(raw_task)
+    except json.JSONDecodeError as exc:
+        raise OrchestrationError(f"invalid --task JSON: {exc}") from exc
+    if not isinstance(supplied, dict):
+        raise OrchestrationError("--task JSON must be an object")
+    allowed = {
+        "id",
+        "display_name",
+        "depends_on",
+        "write_scope",
+        "agent_eligible",
+        "parallel_group",
+        "planned_owner",
+        "branch_or_worktree",
+    }
+    unknown = sorted(set(supplied) - allowed)
+    if unknown:
+        raise OrchestrationError(f"unsupported --task fields: {', '.join(unknown)}")
+    for required in ("id", "depends_on", "write_scope", "agent_eligible"):
+        if required not in supplied:
+            raise OrchestrationError(f"--task is missing required field: {required}")
+    task = {
+        "id": supplied["id"],
+        "display_name": supplied.get("display_name", supplied["id"]),
+        "status": "PENDING",
+        "depends_on": supplied["depends_on"],
+        "write_scope": supplied["write_scope"],
+        "agent_eligible": supplied["agent_eligible"],
+        "owner": "",
+        "started_at": "",
+        "attempts": 0,
+        "evidence": [],
+        "block_reason": "",
+        "parallel_group": supplied.get("parallel_group", ""),
+        "planned_owner": supplied.get("planned_owner", ""),
+        "branch_or_worktree": supplied.get("branch_or_worktree", ""),
+        "assignment_kind": "",
+        "runtime_agent_id": "",
+        "runtime_task_name": "",
+        "spawn_status": "",
+        "spawned_at": "",
+        "finished_at": "",
+        "runtime_verification": "",
+    }
+    validate_task(task, 0)
+    return task
+
+
+def command_init(args: argparse.Namespace) -> None:
+    """Create internal scheduler state without exposing it as an edited artifact."""
+    if args.state.exists() and not args.replace:
+        raise OrchestrationError(f"orchestration state already exists: {args.state}")
+    metadata, _, _ = parse_document(args.plan)
+    revision, _ = require_common(metadata)
+    required_metadata = ("execution_mode", "max_workers", "agent_topology")
+    missing = [field for field in required_metadata if field not in metadata]
+    if missing:
+        raise OrchestrationError(f"plan is missing orchestration fields: {', '.join(missing)}")
+    state = {
+        "schema": SCHEMA,
+        "plan_id": metadata["plan_id"],
+        "revision": revision,
+        "execution_mode": metadata["execution_mode"],
+        "max_workers": metadata["max_workers"],
+        "max_attempts": args.max_attempts,
+        "topology": metadata["agent_topology"],
+        "tasks": [parse_initial_task(raw_task) for raw_task in args.task],
+        "events": [],
+    }
+    validate_state(state)
+    validate_plan(state, args.plan, require_approval=False)
+    write_state(args.state, state)
+    print(f"initialized orchestration state for {state['plan_id']} with {len(state['tasks'])} tasks")
+
+
 def command_validate(args: argparse.Namespace) -> None:
     """Validate scheduler state and plan linkage."""
     state = load_state(args.state)
     tasks = validate_state(state)
-    validate_plan(state, args.plan, require_approval=args.require_approval)
+    validate_plan(
+        state,
+        args.plan,
+        require_approval=args.require_approval,
+        final=args.final,
+    )
+    if args.final:
+        incomplete = [task["id"] for task in tasks.values() if task["status"] != "COMPLETED"]
+        if incomplete:
+            raise OrchestrationError(
+                f"final validation requires completed tasks: {', '.join(incomplete)}"
+            )
     print(f"valid orchestration state for {state['plan_id']} with {len(tasks)} tasks")
 
 
@@ -356,7 +533,8 @@ def command_ready(args: argparse.Namespace) -> None:
     available = max(0, state["max_workers"] - sum(
         1
         for task in tasks.values()
-        if task["status"] == "ASSIGNED" and task["assignment_kind"] == "WORKER"
+        if task["status"] == "ASSIGNED"
+        and task["assignment_kind"] in {"WORKER_PENDING", "WORKER"}
     ))
     for task in state["tasks"]:
         if len(selected) >= available:
@@ -396,7 +574,9 @@ def command_assign(args: argparse.Namespace) -> None:
     if not dependencies_complete(task, tasks):
         raise OrchestrationError(f"task {task['id']} has incomplete dependencies")
     assigned = [item for item in tasks.values() if item["status"] == "ASSIGNED"]
-    assigned_workers = [item for item in assigned if item["assignment_kind"] == "WORKER"]
+    assigned_workers = [
+        item for item in assigned if item["assignment_kind"] in {"WORKER_PENDING", "WORKER"}
+    ]
     if not coordinator_assignment and len(assigned_workers) >= state["max_workers"]:
         raise OrchestrationError("max_workers reached")
     if any(item["owner"] == owner for item in assigned):
@@ -410,15 +590,49 @@ def command_assign(args: argparse.Namespace) -> None:
         {
             "status": "ASSIGNED",
             "owner": owner,
-            "assignment_kind": "COORDINATOR" if coordinator_assignment else "WORKER",
+            "assignment_kind": "COORDINATOR" if coordinator_assignment else "WORKER_PENDING",
             "started_at": now_utc(),
             "attempts": task["attempts"] + 1,
             "block_reason": "",
+            "runtime_agent_id": "",
+            "runtime_task_name": "",
+            "spawn_status": "NOT_APPLICABLE" if coordinator_assignment else "PENDING",
+            "spawned_at": "",
+            "finished_at": "",
+            "runtime_verification": "NOT_APPLICABLE" if coordinator_assignment else "PENDING",
         }
     )
-    append_event(state, "assign", task, "worker assignment persisted")
+    detail = "coordinator assignment persisted" if coordinator_assignment else (
+        "worker slot reserved; native spawn and runtime binding required"
+    )
+    append_event(state, "assign", task, detail)
     write_state(args.state, state)
     print(f"assigned {task['id']} to {owner} as {task['assignment_kind']}")
+
+
+def command_activate(args: argparse.Namespace) -> None:
+    """Bind a reserved task to a successfully spawned native Codex worker."""
+    runtime_agent_id = require_string(args.runtime_agent_id, "runtime_agent_id")
+    runtime_task_name = require_string(args.runtime_task_name, "runtime_task_name")
+    state = load_state(args.state)
+    tasks = validate_state(state)
+    validate_plan(state, args.plan, require_approval=True)
+    task = require_task(tasks, args.task_id)
+    if task["status"] != "ASSIGNED" or task["assignment_kind"] != "WORKER_PENDING":
+        raise OrchestrationError(f"task {task['id']} is not awaiting native worker binding")
+    task.update(
+        {
+            "assignment_kind": "WORKER",
+            "runtime_agent_id": runtime_agent_id,
+            "runtime_task_name": runtime_task_name,
+            "spawn_status": "RUNNING",
+            "spawned_at": now_utc(),
+            "runtime_verification": "VERIFIED",
+        }
+    )
+    append_event(state, "spawn", task, "native Codex worker bound to reserved task")
+    write_state(args.state, state)
+    print(f"activated {task['id']} with native worker {runtime_task_name}")
 
 
 def command_complete(args: argparse.Namespace) -> None:
@@ -430,6 +644,20 @@ def command_complete(args: argparse.Namespace) -> None:
     task = require_task(tasks, args.task_id)
     if task["status"] != "ASSIGNED":
         raise OrchestrationError(f"task {task['id']} is not assigned")
+    if task["assignment_kind"] == "WORKER_PENDING":
+        raise OrchestrationError(
+            f"task {task['id']} cannot complete before native worker activation"
+        )
+    if task["assignment_kind"] == "WORKER":
+        runtime_agent_id = require_string(
+            args.runtime_agent_id or "", "runtime_agent_id", allow_empty=True
+        )
+        if not runtime_agent_id or runtime_agent_id != task["runtime_agent_id"]:
+            raise OrchestrationError(
+                f"task {task['id']} completion requires matching runtime_agent_id"
+            )
+        task["spawn_status"] = "COMPLETED"
+        task["finished_at"] = now_utc()
     task["status"] = "COMPLETED"
     task["evidence"].append(evidence)
     task["block_reason"] = ""
@@ -447,7 +675,11 @@ def command_release(args: argparse.Namespace) -> None:
     task = require_task(tasks, args.task_id)
     if task["status"] not in {"ASSIGNED", "BLOCKED"}:
         raise OrchestrationError(f"task {task['id']} cannot be released from {task['status']}")
+    if args.spawn_failed and task["assignment_kind"] != "WORKER_PENDING":
+        raise OrchestrationError("--spawn-failed requires a reserved worker task")
     previous_owner = task["owner"]
+    action = "spawn_failed" if args.spawn_failed else "release"
+    append_event(state, action, task, f"{reason}; previous owner={previous_owner}")
     task.update(
         {
             "status": "PENDING",
@@ -455,9 +687,14 @@ def command_release(args: argparse.Namespace) -> None:
             "assignment_kind": "",
             "started_at": "",
             "block_reason": "",
+            "runtime_agent_id": "",
+            "runtime_task_name": "",
+            "spawn_status": "",
+            "spawned_at": "",
+            "finished_at": "",
+            "runtime_verification": "",
         }
     )
-    append_event(state, "release", task, f"{reason}; previous owner={previous_owner}")
     write_state(args.state, state)
     print(f"released {task['id']}")
 
@@ -488,6 +725,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    init_parser = subparsers.add_parser(
+        "init", help="create internal scheduler state from compact task arguments"
+    )
+    init_parser.add_argument("state", type=Path)
+    add_plan_argument(init_parser)
+    init_parser.add_argument("--task", action="append", required=True)
+    init_parser.add_argument("--max-attempts", type=int, default=2)
+    init_parser.add_argument("--replace", action="store_true")
+    init_parser.set_defaults(handler=command_init)
+
     inspect_parser = subparsers.add_parser("inspect", help="print normalized state")
     inspect_parser.add_argument("state", type=Path)
     inspect_parser.set_defaults(handler=command_inspect)
@@ -495,7 +742,9 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser = subparsers.add_parser("validate", help="validate state and plan linkage")
     validate_parser.add_argument("state", type=Path)
     add_plan_argument(validate_parser)
-    validate_parser.add_argument("--require-approval", action="store_true")
+    validation_mode = validate_parser.add_mutually_exclusive_group()
+    validation_mode.add_argument("--require-approval", action="store_true")
+    validation_mode.add_argument("--final", action="store_true")
     validate_parser.set_defaults(handler=command_validate)
 
     ready_parser = subparsers.add_parser("ready", help="print a safe ready-task wave")
@@ -512,10 +761,21 @@ def build_parser() -> argparse.ArgumentParser:
     add_plan_argument(assign_parser)
     assign_parser.set_defaults(handler=command_assign)
 
+    activate_parser = subparsers.add_parser(
+        "activate", help="bind a reserved task to a native Codex worker"
+    )
+    activate_parser.add_argument("state", type=Path)
+    activate_parser.add_argument("task_id")
+    activate_parser.add_argument("--runtime-agent-id", required=True)
+    activate_parser.add_argument("--runtime-task-name", required=True)
+    add_plan_argument(activate_parser)
+    activate_parser.set_defaults(handler=command_activate)
+
     complete_parser = subparsers.add_parser("complete", help="complete an assigned task")
     complete_parser.add_argument("state", type=Path)
     complete_parser.add_argument("task_id")
     complete_parser.add_argument("--evidence", required=True)
+    complete_parser.add_argument("--runtime-agent-id")
     add_plan_argument(complete_parser)
     complete_parser.set_defaults(handler=command_complete)
 
@@ -523,6 +783,7 @@ def build_parser() -> argparse.ArgumentParser:
     release_parser.add_argument("state", type=Path)
     release_parser.add_argument("task_id")
     release_parser.add_argument("--reason", required=True)
+    release_parser.add_argument("--spawn-failed", action="store_true")
     add_plan_argument(release_parser)
     release_parser.set_defaults(handler=command_release)
 
