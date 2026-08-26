@@ -2,7 +2,9 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Project Workflow is an approval-gated, active multi-agent Codex plugin for complex software projects. It separates planning from implementation, persists project and scheduling state in the repository, and prevents a newly generated plan from silently continuing into code changes.
+Project Workflow is an approval-gated workflow for complex software engineering tasks. It creates a reviewable design and implementation plan, waits for explicit approval, then executes the approved scope either coordinator-first or with native Codex agents when parallel work is safe and beneficial. It records validation, recovery, and delivery evidence while supporting both Git and non-Git repositories.
+
+Routine small edits, formatting, and simple CRUD changes usually do not need this plugin.
 
 ## Why Project Workflow
 

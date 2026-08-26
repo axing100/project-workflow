@@ -180,8 +180,10 @@ The initial request cannot approve a plan that has not yet been created. Express
 
 Summarize the version-control evidence and rollback posture, parallel tasks, worker cap, coordinator-owned tasks, and fallback behavior in plain language. When the resolved mode is `NONE`, state that agents share one workspace, may only use disjoint write scopes, and tasks requiring worktree isolation will run serially. Do not expose the internal state path. Approval of this plan authorizes only the recorded in-scope native-agent delegation; it does not authorize commit, push, deployment, destructive actions, or scope expansion.
 
-End with links to the durable design and plan and this intent:
-
-`计划已制定完毕，请确认。确认后将按计划执行；子智能体会显示在 Codex 原生界面中，主会话会汇报开始、异常、长任务阶段心跳和最终结果。`
+End with links to the durable design and plan. In the user's current conversation language,
+state that the plan is ready and awaiting confirmation; after confirmation, execution will follow
+the approved plan; native agents will appear in the Codex UI; and the main task will report the
+start, actionable exceptions, long-running phase heartbeats, and the final result. Preserve this
+meaning without reproducing fixed wording verbatim.
 
 Then end the current turn immediately. Do not call implementation, build, test, deployment, or execution tools after that confirmation request.
