@@ -31,6 +31,16 @@ Only after the admission gate accepts the task, own project planning, approval, 
 
 Read [workflow-protocol.md](../../references/workflow-protocol.md) before routing. Load exactly one focused skill for the current turn. Do not perform the focused skill's work in this router.
 
+## Select Workflow Profile
+
+Every newly created plan must persist one workflow profile. The approval gate applies to all profiles.
+
+- `LIGHT`: the user explicitly invoked Project Workflow for a localized, low-risk change. Use one consolidated plan, coordinator-only execution by default, basic regression, and a concise delivery summary. Do not use LIGHT for a hard admission trigger.
+- `STANDARD`: use for multi-module or independently verifiable work without migration, security, compatibility, or data-loss risk. Require a separate design and plan, applicable boundary coverage, and native workers only when the expected critical-path benefit exceeds coordination cost.
+- `FULL`: use for every hard admission trigger, long-running coordinated work, or any material uncertainty about safety. Require adversarial boundaries, recovery and rollback evidence, an independent contract verifier, and a migration state matrix whenever persisted state evolves.
+
+Treat a historical plan without `workflow_profile` as `FULL`. Do not silently weaken an existing plan. A profile change after approval is material re-planning and requires a new revision and renewed confirmation.
+
 ## Route
 
 1. Route to [plan](../plan/SKILL.md) when:
@@ -44,7 +54,7 @@ Read [workflow-protocol.md](../../references/workflow-protocol.md) before routin
 
 ## Explicit Skip
 
-Treat planning as skipped only when the user explicitly says to skip planning or skip the confirmation gate. Phrases such as "implement this", "finish everything", "go ahead", or "do it in one pass" do not pre-approve a plan that does not exist yet.
+Project Workflow never skips its confirmation gate. If the user explicitly declines Project Workflow planning or asks to skip that gate, exit this workflow and handle the request under the normal applicable workflow; do not continue under Project Workflow semantics. Phrases such as "implement this", "finish everything", "go ahead", or "do it in one pass" do not pre-approve a plan that does not exist yet.
 
 ## Isolation
 
