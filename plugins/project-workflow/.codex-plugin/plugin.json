@@ -1,7 +1,7 @@
 {
   "name": "project-workflow",
   "version": "0.4.0",
-  "description": "An approval-gated workflow for complex software projects, with optional native Codex agent orchestration, durable progress, validation, and delivery evidence.",
+  "description": "A delivery workflow for complex software engineering in Codex, with repository-persisted evidence, scoped execution, recovery, validation, and optional native multi-agent collaboration.",
   "author": {
     "name": "chenjiaxing"
   },
@@ -18,8 +18,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Project Workflow",
-    "shortDescription": "Plan, approve, and safely execute complex software work.",
-    "longDescription": "Project Workflow separates planning from implementation, waits for explicit approval, and then executes the approved scope either coordinator-first or with native Codex agents when parallel work is safe and beneficial. It preserves progress, validates changes, supports Git and non-Git repositories, and records recovery and delivery evidence.",
+    "shortDescription": "Reliable delivery workflows for complex Codex engineering.",
+    "longDescription": "Project Workflow persists design, implementation, verification, and delivery evidence in the repository, keeps changes scoped, supports interruption recovery and task retry, and enables native multi-agent collaboration when it provides a measurable benefit. An explicit approval gate controls the transition from plan to execution, with validation and conditional rollback checks based on task risk.",
     "developerName": "chenjiaxing",
     "category": "Productivity",
     "capabilities": [
@@ -28,7 +28,11 @@
       "Write",
       "Multi-agent orchestration"
     ],
+    "brandColor": "#0122E2",
+    "composerIcon": "./assets/project-workflow-icon.svg",
+    "logo": "./assets/project-workflow-icon.svg",
+    "logoDark": "./assets/project-workflow-icon.svg",
     "websiteURL": "https://github.com/axing100/project-workflow",
-    "defaultPrompt": "Use Project Workflow for this complex software task: create a durable plan, wait for my explicit approval, then execute the approved scope with safe coordinator or native-agent orchestration."
+    "defaultPrompt": "Use Project Workflow for this complex software task: create a durable plan, wait for my explicit approval, then execute the approved scope with scoped validation and coordinator or native-agent orchestration when beneficial."
   }
 }
