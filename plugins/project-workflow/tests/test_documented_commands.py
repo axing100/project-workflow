@@ -179,6 +179,14 @@ class DocumentedCommandsTest(unittest.TestCase):
         self.assertIn("next checkpoint", execute_skill)
         self.assertIn("do not use computer control", execute_skill.lower())
 
+    def test_user_facing_plan_confirmation_is_localized(self) -> None:
+        """Keep stable identifiers secondary to localized user-facing language."""
+        plan_skill = " ".join(PUBLIC_DOCUMENTS[3].read_text(encoding="utf-8").split())
+        self.assertIn("current conversation language", plan_skill)
+        self.assertIn("secondary parenthetical", plan_skill)
+        self.assertIn("natural-language feature title", plan_skill)
+        self.assertIn("must not be presented as text the user has to copy", plan_skill)
+
     def test_public_documents_do_not_embed_plugin_cache_paths(self) -> None:
         """Prevent stale machine-specific plugin cache hints from entering sessions."""
         cache_path = re.compile(r"(?:/Users/|/home/|[A-Za-z]:\\\\).*?[.]codex[/\\\\]plugins[/\\\\]cache")

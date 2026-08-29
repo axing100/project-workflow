@@ -1,6 +1,6 @@
 ---
 name: index
-description: Use an approval-gated, repository-persisted workflow with optional active native-agent scheduling only when the user explicitly invokes Project Workflow, approves or resumes an existing Project Workflow plan, or requests a materially complex software change involving architecture, migrations, multiple modules or services, staged rollout, compatibility, rollback, security-sensitive behavior, or long-running coordinated implementation. Do not use for routine localized edits, small bug fixes, ordinary CRUD, mechanical refactors, documentation, tests, formatting, or requests that merely involve several steps or ask for a lightweight plan.
+description: Use an approval-gated, repository-persisted workflow when explicitly invoked, when approving or resuming a persisted plan, or for materially complex software or product/UI changes that require durable design baselines, acceptance evidence, multi-session coordination, architecture, migration, security, compatibility, or rollback control. Do not use for routine localized edits, simple UI polish, ordinary CRUD, documentation, tests, formatting, or lightweight plans.
 ---
 
 # Project Workflow Router
@@ -28,6 +28,8 @@ Do not accept merely because a task has several implementation steps or the user
 ## Accepted Workflow Ownership
 
 Only after the admission gate accepts the task, own project planning, approval, phase transitions, native-agent scheduling, execution coordination, and delivery state. Allow other skills to provide specialized capabilities, but do not let them skip approval, change the active phase, start implementation early, or independently create a competing agent topology.
+
+Use specialized skills only when they provide a material capability or evidence that this workflow cannot obtain as effectively. Do not invoke another skill merely because the task belongs to its domain. Missing specialized skills are non-blocking.
 
 Read [workflow-protocol.md](../../references/workflow-protocol.md) before routing. Load exactly one focused skill for the current turn. Do not perform the focused skill's work in this router.
 

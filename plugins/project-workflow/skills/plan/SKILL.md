@@ -133,7 +133,7 @@ Choose a conservative `max_workers`; the coordinator also consumes a runtime col
 
 For `AUTO_MULTI_AGENT`, estimate implementation time and coordination time for each agent-eligible task, identify critical-path tasks, and require at least 20% expected critical-path savings after coordination cost. Default to at most two Workers unless inspected runtime capacity and the task graph justify a different explicit limit. Independent contract verification is a quality-isolation exception: it may be delegated when it is the only ready Worker task, provided its write scope does not overlap the implementation it verifies.
 
-Default `progress_reporting` to `COMPACT`. Use `DETAILED` only when the user explicitly asks for debug-level workflow output. In compact mode, use user-facing task labels and plain-language phases; do not show raw enum values, runtime agent IDs, canonical `/root/...` task names, plugin cache paths, or state-helper commands.
+Default `progress_reporting` to `COMPACT`. Use `DETAILED` only when the user explicitly asks for debug-level workflow output. In compact mode, use user-facing task labels and plain-language phases; do not show raw enum values, runtime agent IDs, canonical `/root/...` task names, plugin cache paths, or state-helper commands. Localize user-facing workflow values to the current conversation language. When a stable enum is useful for traceability, show it only as a secondary parenthetical after a plain-language explanation, never as the sole explanation.
 
 ## Plan Tasks
 
@@ -184,6 +184,8 @@ End with links to the durable design and plan. In the user's current conversatio
 state that the plan is ready and awaiting confirmation; after confirmation, execution will follow
 the approved plan; native agents will appear in the Codex UI; and the main task will report the
 start, actionable exceptions, long-running phase heartbeats, and the final result. Preserve this
-meaning without reproducing fixed wording verbatim.
+meaning without reproducing fixed wording verbatim. Phrase the approval request with the natural-language
+feature title and localized revision wording. Machine identifiers such as `plan_id` and `revision` may
+appear separately for traceability, but must not be presented as text the user has to copy to approve.
 
 Then end the current turn immediately. Do not call implementation, build, test, deployment, or execution tools after that confirmation request.
