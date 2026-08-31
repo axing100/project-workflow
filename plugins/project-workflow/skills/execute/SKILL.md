@@ -13,6 +13,8 @@ At the beginning and after compaction, restart, handoff, or interruption:
 
 1. Re-read applicable `AGENTS.md`, the durable design, and the durable plan.
 2. Run Doctor against the plan and reconcile the current version-control resolution, evidence state, and recorded task state. Inspect Git status only when the approved `resolved_vcs_mode` is `GIT`; in `NONE`, do not run Git commands.
+   Inspect and refresh the generated task view through `task_state.py inspect` and
+   `task_state.py render`; never hand-edit its controlled Markdown blocks.
 3. If the current user message explicitly approves an `AWAITING_CONFIRMATION` plan, atomically record that exact approval and enter execution with:
 
    ```bash
@@ -111,14 +113,29 @@ In `DETAILED` mode, lifecycle and diagnostic details may be expanded, but native
 
 For each dependency-ready task in `SINGLE_AGENT` mode or coordinator fallback:
 
-1. Mark exactly one task `[~]` in single-agent mode.
+1. Start implementation with `task_state.py start-implementation`; in single-agent mode the helper permits exactly one implementation task in progress.
 2. Implement the smallest change satisfying the task.
 3. Add or update tests proportional to behavior and risk.
 4. Run narrow checks first, then affected-module regression.
 5. Diagnose, fix, and rerun failures until acceptance criteria pass or a genuine blocker remains.
 6. Record paths, commands, results, deviations, authorization evidence, and mode-appropriate change evidence: Git status/diff for `GIT`, or the file-system comparison and write-scope result for `NONE`.
-7. Mark `[x]` only when acceptance criteria and Definition of Done pass.
+7. Record implementation completion with evidence, then start verification and record `PASSED`, `PARTIAL`, `FAILED`, `BLOCKED`, or `NOT_APPLICABLE` independently. Implementation completion never implies verification success.
 8. Continue without routine approval requests.
+
+Use state transitions instead of editing status text:
+
+```bash
+python3 <plugin-root>/scripts/task_state.py start-implementation <plan-path> <task-id> --repo <repo-root>
+python3 <plugin-root>/scripts/task_state.py complete-implementation <plan-path> <task-id> --repo <repo-root> --evidence <evidence>
+python3 <plugin-root>/scripts/task_state.py start-verification <plan-path> <task-id> --repo <repo-root>
+python3 <plugin-root>/scripts/task_state.py pass-verification <plan-path> <task-id> --repo <repo-root> --evidence <evidence>
+```
+
+Use `partial-verification`, `fail-verification`, `block-verification`, or
+`skip-verification` when those outcomes are accurate. Pass `--expected-version` whenever another
+writer may have advanced task state. The final lifecycle command rejects every implementation
+state other than `COMPLETED` and every verification state other than `PASSED` or
+`NOT_APPLICABLE`.
 
 Run planned `DISCOVERY` validation while new tests or selectors are still being created. Use an `EXACT` selector only after confirming it exists; if a planned selector is stale, recover internally to discovery, record the correction as evidence, and report it only when it changes scope or blocks acceptance.
 

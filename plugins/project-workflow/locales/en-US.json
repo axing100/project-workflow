@@ -1,0 +1,24 @@
+{
+  "summary_title": "Task progress",
+  "implementation_label": "Implementation",
+  "verification_label": "Verification",
+  "evidence_label": "Evidence",
+  "reason_label": "Reason",
+  "summary_implementation": "Implementation",
+  "summary_verification": "Verification",
+  "implementation": {
+    "NOT_STARTED": "⚪ Not started",
+    "IN_PROGRESS": "🔵 In progress",
+    "COMPLETED": "✅ Completed",
+    "BLOCKED": "⛔ Blocked"
+  },
+  "verification": {
+    "NOT_STARTED": "⚪ Not started",
+    "IN_PROGRESS": "🔵 In progress",
+    "PARTIAL": "🟡 Partially passed",
+    "PASSED": "✅ Passed",
+    "FAILED": "❌ Failed",
+    "BLOCKED": "⛔ Blocked",
+    "NOT_APPLICABLE": "➖ Not applicable"
+  }
+}

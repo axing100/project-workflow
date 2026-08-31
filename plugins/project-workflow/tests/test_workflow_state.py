@@ -148,19 +148,67 @@ class WorkflowStateTest(unittest.TestCase):
     def test_init_preserves_markdown_body(self) -> None:
         self.initialize()
         metadata = self.inspect()
-        self.assertEqual("v0.4", metadata["policy_contract"])
+        self.assertEqual("v0.5", metadata["policy_contract"])
         self.assertEqual("AWAITING_CONFIRMATION", metadata["phase"])
         self.assertEqual(1, metadata["revision"])
         self.assertEqual("Implementation Plan", metadata["conversation_title"])
         self.assertEqual(5, metadata["progress_heartbeat_minutes"])
         self.assertIn("# Implementation Plan\n\nKeep this body.\n", self.plan.read_text(encoding="utf-8"))
 
+    def test_plan_lock_does_not_pollute_document_directory(self) -> None:
+        """Store lifecycle locks outside the user-facing plan directory."""
+        self.initialize()
+
+        self.assertFalse((self.plan.parent / f".{self.plan.name}.lock").exists())
+
+    def test_explicit_repo_uses_internal_plan_lock(self) -> None:
+        """Keep repository-scoped lifecycle locks under the internal state root."""
+        repo = Path(self.temporary_directory.name)
+        self.run_command(
+            "init", str(self.plan), "--plan-id", "test-plan", "--repo", str(repo)
+        )
+
+        locks = list((repo / ".codex/project-workflow/.locks").glob("plan-*.lock"))
+        self.assertEqual(1, len(locks))
+        self.assertFalse((self.plan.parent / f".{self.plan.name}.lock").exists())
+
+    def test_explicit_repo_rejects_symlinked_internal_lock_parent(self) -> None:
+        """Do not redirect lifecycle locks through a repository state symlink."""
+        repo = Path(self.temporary_directory.name)
+        external = repo.parent / f"{repo.name}-external-locks"
+        external.mkdir()
+        self.addCleanup(lambda: external.rmdir() if external.exists() else None)
+        (repo / ".codex").symlink_to(external, target_is_directory=True)
+
+        result = self.run_command(
+            "init",
+            str(self.plan),
+            "--plan-id",
+            "test-plan",
+            "--repo",
+            str(repo),
+            expected=2,
+        )
+
+        self.assertIn("symlink", result.stderr.lower())
+        self.assertEqual([], list(external.iterdir()))
+
+    def test_cleanup_legacy_lock_is_explicit(self) -> None:
+        """Remove only an inactive adjacent lock through the explicit migration command."""
+        legacy_lock = self.plan.parent / f".{self.plan.name}.lock"
+        legacy_lock.touch()
+
+        self.run_command("cleanup-legacy-lock", str(self.plan))
+
+        self.assertFalse(legacy_lock.exists())
+        self.assertFalse(any(self.plan.parent.glob(".*.md.lock")))
+
     def test_unknown_policy_contract_fails_closed(self) -> None:
         """A future or mistyped contract must not silently inherit legacy rules."""
         self.initialize()
         self.plan.write_text(
             self.plan.read_text(encoding="utf-8").replace(
-                'policy_contract: "v0.4"', 'policy_contract: "v9"'
+                'policy_contract: "v0.5"', 'policy_contract: "v9"'
             ),
             encoding="utf-8",
         )

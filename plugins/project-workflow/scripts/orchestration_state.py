@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from workflow_state import WorkflowError, parse_document, require_common
+from workflow_state import WorkflowError, parse_document, private_lock_path, require_common
 
 
 SCHEMA = "project-workflow/orchestration/v1"
@@ -363,8 +363,7 @@ def locked_state(
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
                 os.close(descriptor)
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_name(f".{path.name}.lock")
+    lock_path = private_lock_path(path, "orchestration")
     flags = os.O_RDWR | os.O_CREAT
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -991,8 +990,8 @@ def validate_state(
     )
     state.setdefault("policy_contract", "legacy")
     policy_contract = require_string(state["policy_contract"], "policy_contract")
-    if policy_contract not in {"legacy", "v0.4"}:
-        raise OrchestrationError("policy_contract must be legacy or v0.4")
+    if policy_contract not in {"legacy", "v0.4", "v0.5"}:
+        raise OrchestrationError("policy_contract must be legacy, v0.4, or v0.5")
     state["policy_contract"] = policy_contract
     topology = require_string(state["topology"], "topology")
     if topology not in VALID_TOPOLOGIES:
@@ -1114,13 +1113,13 @@ def validate_plan(
         raise OrchestrationError("VCS NONE requires SHARED_WORKSPACE topology")
     if "parallelism_policy" in metadata:
         plan_policy = metadata["parallelism_policy"]
-        if state["policy_contract"] == "v0.4" and plan_policy != state["parallelism_policy"]:
+        if state["policy_contract"] in {"v0.4", "v0.5"} and plan_policy != state["parallelism_policy"]:
             raise OrchestrationError("orchestration parallelism_policy does not match plan")
     workflow_profile = metadata.get("workflow_profile", "FULL")
     if workflow_profile not in {"LIGHT", "STANDARD", "FULL"}:
         raise OrchestrationError(f"invalid workflow_profile: {workflow_profile}")
     if (
-        state["policy_contract"] == "v0.4"
+        state["policy_contract"] in {"v0.4", "v0.5"}
         and workflow_profile == "FULL"
     ):
         if not any(task["independent_verification"] for task in state["tasks"]):
@@ -1285,7 +1284,7 @@ def command_init(args: argparse.Namespace) -> None:
         "minimum_parallel_savings_percent": metadata.get(
             "minimum_parallel_savings_percent", 20
         ),
-        "policy_contract": "v0.4",
+        "policy_contract": metadata.get("policy_contract", "v0.4"),
         "state_version": previous_version,
         "tasks": [parse_initial_task(raw_task) for raw_task in args.task],
         "events": [],

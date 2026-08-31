@@ -16,6 +16,7 @@ WORKFLOW_STATE = PLUGIN_ROOT / "scripts/workflow_state.py"
 ORCHESTRATION_STATE = PLUGIN_ROOT / "scripts/orchestration_state.py"
 DOCTOR = PLUGIN_ROOT / "scripts/project_workflow_doctor.py"
 FILESYSTEM_SNAPSHOT = PLUGIN_ROOT / "scripts/filesystem_snapshot.py"
+TASK_STATE = PLUGIN_ROOT / "scripts/task_state.py"
 PUBLIC_DOCUMENTS = (
     REPOSITORY_ROOT / "README.md",
     REPOSITORY_ROOT / "README.zh-CN.md",
@@ -28,6 +29,7 @@ SCRIPT_BY_NAME = {
     ORCHESTRATION_STATE.name: ORCHESTRATION_STATE,
     DOCTOR.name: DOCTOR,
     FILESYSTEM_SNAPSHOT.name: FILESYSTEM_SNAPSHOT,
+    TASK_STATE.name: TASK_STATE,
 }
 
 

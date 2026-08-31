@@ -22,6 +22,7 @@ from workflow_state import (
     WorkflowError,
     detect_git,
     parse_document,
+    policy_contract,
     require_approval_record,
     require_common,
     require_execution_vcs,
@@ -29,6 +30,13 @@ from workflow_state import (
     resolve_vcs,
     rollback_evidence_verified,
     validate_completed_evidence,
+)
+from task_state import (
+    TASK_HEADING,
+    TaskStateError,
+    state_exists as task_state_exists,
+    task_state_path,
+    validate_for_plan,
 )
 
 
@@ -55,6 +63,15 @@ REQUIRED_ORCHESTRATION_COMMANDS = (
     "complete",
     "release",
     "block",
+)
+REQUIRED_TASK_COMMANDS = (
+    "migrate",
+    "inspect",
+    "render",
+    "start-implementation",
+    "complete-implementation",
+    "start-verification",
+    "pass-verification",
 )
 
 
@@ -218,6 +235,8 @@ def inspect_plan(
         "revision": None,
         "orchestration_status": "NOT_CHECKED",
         "orchestration_path": None,
+        "task_state_status": "NOT_CHECKED",
+        "task_state_path": None,
     }
     issues: List[Dict[str, str]] = []
     if plan_argument is None:
@@ -231,7 +250,7 @@ def inspect_plan(
     try:
         plan = resolve_under_repo(repo, plan_argument)
         result["path"] = str(plan)
-        metadata, _, _ = parse_document(plan)
+        metadata, _, body = parse_document(plan)
         revision, phase = require_common(metadata)
         if phase in {"APPROVED", "IN_PROGRESS", "COMPLETED"}:
             require_approval_record(metadata, revision)
@@ -246,6 +265,28 @@ def inspect_plan(
             "revision": revision,
         }
     )
+    task_path = task_state_path(repo, str(metadata["plan_id"]))
+    result["task_state_path"] = str(task_path)
+    try:
+        contract = policy_contract(metadata)
+        if task_state_exists(task_path, repo):
+            task_version = validate_for_plan(plan, repo, final=phase == "COMPLETED")
+            if phase == "COMPLETED" and contract == "v0.5" and metadata.get(
+                "final_task_state_version"
+            ) != task_version:
+                raise TaskStateError(
+                    "completed plan does not bind the validated task state_version"
+                )
+            result["task_state_status"] = "OK"
+        elif contract == "v0.5" and TASK_HEADING.search(body):
+            raise TaskStateError("v0.5 plan requires internal task state")
+        else:
+            result["task_state_status"] = "MIGRATABLE"
+    except (OSError, WorkflowError, OrchestrationError, TaskStateError) as exc:
+        result["status"] = "BLOCKED"
+        result["task_state_status"] = "BLOCKED"
+        issues.append(issue("TASK_STATE_INVALID", "BLOCKER", str(exc)))
+        return result, issues
     if phase == "COMPLETED":
         try:
             validate_completed_evidence(metadata, plan, repo)
@@ -421,6 +462,7 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
         "status": "NOT_CHECKED",
         "workflow_state": "NOT_CHECKED",
         "orchestration_state": "NOT_CHECKED",
+        "task_state": "NOT_CHECKED",
     }
     if plugin_root is not None:
         trusted = plugin_root == Path(__file__).resolve().parents[1]
@@ -431,19 +473,25 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
         orchestration_status, orchestration_detail = checker(
             plugin_root / "scripts/orchestration_state.py", REQUIRED_ORCHESTRATION_COMMANDS
         )
+        task_status, task_detail = checker(
+            plugin_root / "scripts/task_state.py", REQUIRED_TASK_COMMANDS
+        )
         cli.update(
             {
                 "status": "OK"
-                if workflow_status == orchestration_status == "OK"
+                if workflow_status == orchestration_status == task_status == "OK"
                 else "BLOCKED",
                 "workflow_state": workflow_status,
                 "orchestration_state": orchestration_status,
+                "task_state": task_status,
             }
         )
         if workflow_detail:
             issues.append(issue("WORKFLOW_CLI_INVALID", "BLOCKER", workflow_detail))
         if orchestration_detail:
             issues.append(issue("ORCHESTRATION_CLI_INVALID", "BLOCKER", orchestration_detail))
+        if task_detail:
+            issues.append(issue("TASK_CLI_INVALID", "BLOCKER", task_detail))
 
     python_status = "OK" if sys.version_info >= (3, 9) else "BLOCKED"
     if python_status == "BLOCKED":

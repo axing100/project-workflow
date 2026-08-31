@@ -43,6 +43,12 @@ APPROVED / IN_PROGRESS
 
 插件内置的 `workflow_state.py` 会校验必填字段、计划版本、确认记录和合法状态迁移，仅依赖 Python 标准库。
 
+## 双维任务状态
+
+任务实现和任务验收分别记录，避免“代码已经完成、环境验收尚未结束”仍被显示成编码进行中。内部 JSON 是唯一事实来源，计划 Markdown 中的汇总和任务状态块由脚本生成，不能手工回写或通过文字、Emoji 反推状态。
+
+展示只支持简体中文和英语：中文会话使用 `zh-CN`，其他或不支持的语言回退 `en-US`。两种语言共用固定符号：⚪ 未开始、🔵 进行中、🟡 部分通过、✅ 完成/通过、❌ 未通过、⛔ 阻塞、➖ 不适用。最终完成要求所有任务实现完成，并且验收通过或明确不适用。
+
 ## 工作流分级
 
 每份新计划都会记录以下一种级别。所有级别保留相同的审批边界：规划必须在实施前停止，只有用户确认当前 revision 后才能开始执行。
@@ -152,6 +158,12 @@ python3 plugins/project-workflow/scripts/workflow_state.py experience <plan.md>
 python3 plugins/project-workflow/scripts/workflow_state.py start-execution <plan.md> --repo <仓库根目录> --confirmation "<用户确认消息>"
 python3 plugins/project-workflow/scripts/workflow_state.py resume <plan.md> --repo <仓库根目录>
 python3 plugins/project-workflow/scripts/workflow_state.py complete <plan.md> --repo <仓库根目录>
+python3 plugins/project-workflow/scripts/workflow_state.py cleanup-legacy-lock <plan.md> --repo <仓库根目录>
+python3 plugins/project-workflow/scripts/task_state.py migrate <plan.md> --repo <仓库根目录> --display-language zh-CN
+python3 plugins/project-workflow/scripts/task_state.py start-implementation <plan.md> <task-id> --repo <仓库根目录>
+python3 plugins/project-workflow/scripts/task_state.py complete-implementation <plan.md> <task-id> --repo <仓库根目录> --evidence <证据>
+python3 plugins/project-workflow/scripts/task_state.py start-verification <plan.md> <task-id> --repo <仓库根目录>
+python3 plugins/project-workflow/scripts/task_state.py pass-verification <plan.md> <task-id> --repo <仓库根目录> --evidence <证据>
 python3 plugins/project-workflow/scripts/orchestration_state.py validate <state.json> --plan <plan.md> --repo <仓库根目录> --final
 python3 plugins/project-workflow/scripts/orchestration_state.py ready <state.json> --plan <plan.md> --repo <仓库根目录> --agent-only
 python3 plugins/project-workflow/scripts/orchestration_state.py assign <state.json> <task-id> --plan <plan.md> --repo <仓库根目录> --owner <任务名> --expected-version <状态版本>
@@ -160,7 +172,9 @@ python3 plugins/project-workflow/scripts/orchestration_state.py complete <state.
 python3 plugins/project-workflow/scripts/orchestration_state.py inspect <state.json> --repo <仓库根目录>
 ```
 
-`experience` 返回当前业务会话标题和心跳间隔；旧计划会从一级标题或计划 ID 推导标题，并默认使用 5 分钟。生命周期写入会持有稳定计划锁。`start-execution` 会原子记录确认、校验批准的 revision；对当前 `NONE` 计划，它会在进入 `IN_PROGRESS` 前创建并绑定到本次审批的不可变基线，还可用 `--expected-revision`、`--expected-phase` 和 `--expected-sha256` 做显式 CAS。`resume` 对执行中计划幂等成功且不写回，并且是从 `BLOCKED` 恢复执行的唯一门禁入口。`complete` 会持有调度锁、再次验证全部任务并绑定所接受的 `state_version`；对当前 `NONE` 计划还会用调度任务范围或串行计划的 `filesystem_write_scopes` 重新计算并绑定基线比较。失败不修改计划，Doctor 复用同一最终验证器。低层命令继续用于历史兼容，但不能绕过恢复门禁。调度状态每次写入递增 `state_version`，并支持 `--expected-version`；释放已启动 Worker 必须携带运行身份和 `--stopped-evidence`，未启动的预留只能用 `--spawn-failed`。
+`experience` 返回当前业务会话标题和心跳间隔；旧计划会从一级标题或计划 ID 推导标题，并默认使用 5 分钟。生命周期写入使用内部稳定计划锁，不再在计划旁创建 `.md.lock`；旧相邻锁只通过 `cleanup-legacy-lock` 显式清理。`task_state.py` 保存双维状态并渲染中文或英语视图，`migrate` 对旧标记做保守、幂等迁移。`start-execution` 会原子记录确认并校验 revision；`resume` 是从 `BLOCKED` 恢复执行的唯一门禁入口。`complete` 会校验任务实现与验收状态，绑定任务和调度状态版本，并在 `NONE` 模式下重算最终差异。失败不修改计划，Doctor 复用同一最终验证器。
+
+并发写入可使用 `--expected-sha256` 和 `--expected-version` 做 CAS。释放已启动 Worker 必须携带 `--stopped-evidence`，未启动预留使用 `--spawn-failed`。
 
 这些脚本用于增强状态一致性，但它们不是授权或安全边界，也无法通过密码学方式证明自然语言确认的真实性。
 
@@ -210,7 +224,7 @@ marketplace 文件。脚本会在安装期间短暂切换本地 marketplace，�
 
 ## 历史兼容与回滚
 
-v0.4 保留此前的低层生命周期命令，并继续读取 v0.3 的计划和调度状态。缺少新的可选调度字段不需要迁移，缺少 `workflow_profile` 时按 `FULL` 处理，缺少 `vcs_mode` 时按 `AUTO` 读取且不会为了补字段而改写历史计划。
+v0.5 继续读取 v0.4 及更早的计划和调度状态。旧计划无需立即迁移；需要双维状态展示时，通过 `task_state.py migrate` 显式、保守地迁移。缺少 `workflow_profile` 时按 `FULL` 处理，缺少 `vcs_mode` 时按 `AUTO` 读取且不会为了补字段而改写历史计划。
 
 源码回滚基线为 `v0.3.0` 发布版本。可以恢复或重装该版本的压缩包；从 Git 克隆参与开发时也可以使用对应 tag。插件不会自动 reset、提交、打 tag、推送、部署或覆盖用户改动。本机重装通过标准 marketplace/cachebuster 流程完成，改变当前 Codex 安装时仍需用户明确授权。
 

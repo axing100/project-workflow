@@ -1,6 +1,6 @@
 {
   "name": "project-workflow",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "A delivery workflow for complex software engineering in Codex, with repository-persisted evidence, scoped execution, recovery, validation, and optional native multi-agent collaboration.",
   "author": {
     "name": "chenjiaxing"

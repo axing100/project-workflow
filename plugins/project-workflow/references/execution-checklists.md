@@ -7,7 +7,8 @@ Use these as mandatory quality gates for non-trivial work. Copy applicable items
 ```markdown
 ### TNN Task title
 
-- Status: [ ] / [~] / [x] / [!]
+- Implementation status: generated from internal task state
+- Verification status: generated from internal task state
 - Owner: agent or person; omit only for single-agent work
 - Depends-On: task IDs or `none`
 - Write-Scope: exact non-overlapping paths or areas
@@ -136,7 +137,7 @@ Select relevant rows and record evidence. Mark an irrelevant row `N/A` with a re
 
 ## Final Delivery
 
-- [ ] All tasks have a terminal state and no unexplained `[~]` item remains.
+- [ ] Every task has `COMPLETED` implementation plus `PASSED` or `NOT_APPLICABLE` verification, with evidence.
 - [ ] Full regression or the closest feasible substitute was run and recorded.
 - [ ] Integration across tasks and agents was reviewed and tested.
 - [ ] Runtime workers, companion state, task evidence, and final Git or file-system evidence were reconciled.
