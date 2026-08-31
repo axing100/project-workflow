@@ -131,12 +131,12 @@ This section applies only to `GIT`. In `NONE`, skip it entirely and prohibit bra
 
 ## Progress Model
 
-- Single-agent mode permits exactly one `[~]` task.
-- Multi-agent mode permits at most one `[~]` task per active worker.
+- Single-agent mode permits exactly one task whose implementation state is `IN_PROGRESS`.
+- Multi-agent mode permits at most one implementation task in progress per active worker.
 - Every active task records `Owner`, `Started`, `Write scope`, and optional `Branch/Worktree`.
 - Every native Worker records the runtime agent ID and canonical task name returned by Codex. A reservation without them is `WORKER_PENDING`, never `WORKER`.
-- A worker completion report does not make a task `[x]`; the coordinator marks completion only after acceptance evidence and integration checks pass.
-- Use `[!]` only for a genuine blocker and include impact, attempts, owner, and required resolution.
+- A worker completion report does not complete verification; the coordinator records implementation and verification evidence separately.
+- Use the implementation or verification `BLOCKED` state only for a genuine blocker and include impact, attempts, owner, and required resolution.
 
 The default retry policy is one clarification or correction sent to the original worker. If the corrected handoff is still insufficient, release the task and either reassign it once, let the coordinator take it over, or mark it blocked. Never loop retries without a fixed stopping condition.
 

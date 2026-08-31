@@ -57,9 +57,11 @@ MUTATION_COMMANDS = {
     "complete",
     "resume",
     "transition",
+    "cleanup-legacy-lock",
 }
 PLAN_LOCK_TIMEOUT_SECONDS = 5.0
-CURRENT_POLICY_CONTRACT = "v0.4"
+CURRENT_POLICY_CONTRACT = "v0.5"
+SUPPORTED_POLICY_CONTRACTS = {"v0.4", CURRENT_POLICY_CONTRACT}
 TRANSITIONAL_V04_FIELDS = {
     "workflow_profile",
     "vcs_mode",
@@ -83,12 +85,17 @@ def policy_contract(metadata: Dict[str, object]) -> str:
     """Classify explicit/current plans without letting malformed plans become legacy."""
     if "policy_contract" in metadata:
         value = metadata["policy_contract"]
-        if not isinstance(value, str) or value != CURRENT_POLICY_CONTRACT:
+        if not isinstance(value, str) or value not in SUPPORTED_POLICY_CONTRACTS:
             raise WorkflowError(f"unsupported policy_contract: {value}")
-        return CURRENT_POLICY_CONTRACT
+        return value
     if any(field in metadata for field in TRANSITIONAL_V04_FIELDS):
-        return CURRENT_POLICY_CONTRACT
+        return "v0.4"
     return "legacy"
+
+
+def managed_policy(metadata: Dict[str, object]) -> bool:
+    """Return whether a plan uses a supported persisted policy contract."""
+    return policy_contract(metadata) in SUPPORTED_POLICY_CONTRACTS
 
 
 def requested_vcs_mode(metadata: Dict[str, object]) -> str:
@@ -232,15 +239,57 @@ def normalize_command_paths(args: argparse.Namespace) -> None:
     args.plan = args.plan.expanduser().resolve()
 
 
+def private_lock_path(path: Path, namespace: str, repo: Optional[Path] = None) -> Path:
+    """Return a stable internal lock path without touching user document directories."""
+    target = path.expanduser().resolve()
+    if repo is not None:
+        root = repo.expanduser().resolve()
+        if not path_is_within(target, root):
+            raise WorkflowError("lock target must be inside repository")
+        identity = target.relative_to(root).as_posix()
+        lock_root = root / ".codex/project-workflow/.locks"
+    else:
+        identity = str(target)
+        lock_root = Path(tempfile.gettempdir()) / f"project-workflow-{os.getuid()}" / "locks"
+        lock_root.mkdir(parents=True, mode=0o700, exist_ok=True)
+        try:
+            os.chmod(lock_root, 0o700)
+        except OSError:
+            pass
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    return lock_root / f"{namespace}-{digest}.lock"
+
+
 @contextmanager
-def locked_plan(path: Path, timeout_seconds: float = PLAN_LOCK_TIMEOUT_SECONDS):
+def locked_plan(
+    path: Path,
+    timeout_seconds: float = PLAN_LOCK_TIMEOUT_SECONDS,
+    repo: Optional[Path] = None,
+):
     """Hold a stable cross-process lock for a complete plan read-modify-write."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_name(f".{path.name}.lock")
+    lock_path = private_lock_path(path, "plan", repo)
     flags = os.O_RDWR | os.O_CREAT
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
-    descriptor = os.open(lock_path, flags, 0o600)
+    access = None
+    if repo is not None:
+        import orchestration_state as orchestration_module
+
+        try:
+            access = orchestration_module.InternalStateAccess(
+                lock_path, repo, create_parents=True
+            )
+            descriptor = access.open_regular(access.name, flags)
+        except orchestration_module.OrchestrationError as exc:
+            if access is not None:
+                access.close()
+            raise WorkflowError(str(exc)) from exc
+        except Exception:
+            if access is not None:
+                access.close()
+            raise
+    else:
+        descriptor = os.open(lock_path, flags, 0o600)
     with os.fdopen(descriptor, "a+", encoding="utf-8") as handle:
         deadline = time.monotonic() + timeout_seconds
         while True:
@@ -255,6 +304,8 @@ def locked_plan(path: Path, timeout_seconds: float = PLAN_LOCK_TIMEOUT_SECONDS):
             yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            if access is not None:
+                access.close()
 
 
 def content_sha256(path: Path) -> str:
@@ -539,7 +590,7 @@ def command_approve(args: argparse.Namespace) -> None:
         "confirmation_record": confirmation,
     }
     if (
-        policy_contract(metadata) == CURRENT_POLICY_CONTRACT
+        managed_policy(metadata)
         and metadata.get("resolved_vcs_mode") == "NONE"
     ):
         approval_update["approved_filesystem_policy_sha256"] = (
@@ -602,7 +653,7 @@ def approval_confirmation_sha256(metadata: Dict[str, object]) -> str:
 def filesystem_policy_sha256(metadata: Dict[str, object]) -> str:
     """Digest the NONE evidence configuration that explicit approval covers."""
     payload = {
-        "policy_contract": CURRENT_POLICY_CONTRACT,
+        "policy_contract": policy_contract(metadata),
         "plan_id": metadata.get("plan_id"),
         "revision": metadata.get("revision"),
         "resolved_vcs_mode": metadata.get("resolved_vcs_mode"),
@@ -681,7 +732,7 @@ def load_bound_baseline(
     revision = metadata["revision"]
     binding = baseline.get("binding")
     expected_binding = {
-        "policy_contract": CURRENT_POLICY_CONTRACT,
+        "policy_contract": policy_contract(metadata),
         "plan_id": metadata["plan_id"],
         "revision": revision,
         "approved_revision": metadata["approved_revision"],
@@ -706,7 +757,7 @@ def load_bound_baseline(
 def require_current_none_baseline(metadata: Dict[str, object], repo: Path) -> None:
     """Require approval-bound evidence before a current NONE plan may execute."""
     if (
-        policy_contract(metadata) == CURRENT_POLICY_CONTRACT
+        managed_policy(metadata)
         and metadata.get("resolved_vcs_mode") == "NONE"
     ):
         load_bound_baseline(metadata, repo)
@@ -740,7 +791,7 @@ def create_bound_baseline(
         output = snapshot_module.internal_state_path(repo, output_value)
         snapshot = snapshot_module.build_snapshot(repo, scopes, excludes)
         snapshot["binding"] = {
-            "policy_contract": CURRENT_POLICY_CONTRACT,
+            "policy_contract": policy_contract(metadata),
             "plan_id": metadata["plan_id"],
             "revision": metadata["revision"],
             "approved_revision": metadata["approved_revision"],
@@ -785,7 +836,7 @@ def command_create_baseline(args: argparse.Namespace) -> None:
         raise WorkflowError("create-baseline requires explicit --repo")
     metadata, order, body = parse_document(args.plan)
     revision, phase = require_common(metadata)
-    if policy_contract(metadata) != CURRENT_POLICY_CONTRACT:
+    if not managed_policy(metadata):
         raise WorkflowError("create-baseline is only available for current plans")
     if phase != "APPROVED":
         raise WorkflowError(f"create-baseline requires APPROVED, found {phase}")
@@ -845,6 +896,25 @@ def resolve_orchestration_path(metadata: Dict[str, object], repo: Path) -> Optio
         raise WorkflowError(str(exc)) from exc
 
 
+def validate_task_state(
+    metadata: Dict[str, object], plan: Path, repo: Path, final: bool = False
+) -> Optional[int]:
+    """Validate v0.5 task-state linkage and return its state version."""
+    if policy_contract(metadata) != "v0.5":
+        return None
+    import task_state as task_module
+
+    try:
+        state_path = task_module.task_state_path(repo, str(metadata["plan_id"]))
+        if not task_module.state_exists(state_path, repo):
+            _, _, body = parse_document(plan)
+            if not task_module.TASK_HEADING.search(body):
+                return None
+        return task_module.validate_for_plan(plan, repo, final=final)
+    except (OSError, task_module.TaskStateError) as exc:
+        raise WorkflowError(str(exc)) from exc
+
+
 @contextmanager
 def locked_final_orchestration(
     metadata: Dict[str, object],
@@ -879,7 +949,7 @@ def require_final_filesystem_evidence(
     """Persist and return an immutable final artifact for a current NONE plan."""
     if metadata.get("resolved_vcs_mode", "") != "NONE":
         return None
-    if policy_contract(metadata) != CURRENT_POLICY_CONTRACT:
+    if not managed_policy(metadata):
         return None
 
     import filesystem_snapshot as snapshot_module
@@ -919,7 +989,7 @@ def require_final_filesystem_evidence(
         )
     artifact: Dict[str, object] = {
         "schema": snapshot_module.FINAL_EVIDENCE_SCHEMA,
-        "policy_contract": CURRENT_POLICY_CONTRACT,
+        "policy_contract": policy_contract(metadata),
         "plan_id": metadata["plan_id"],
         "revision": metadata["revision"],
         "approved_revision": metadata["approved_revision"],
@@ -964,8 +1034,13 @@ def validate_completed_evidence(
     """Validate immutable evidence bound to one completed current plan."""
     if metadata.get("phase") != "COMPLETED":
         raise WorkflowError("completed evidence validation requires COMPLETED phase")
-    if policy_contract(metadata) != CURRENT_POLICY_CONTRACT:
+    if not managed_policy(metadata):
         return
+    task_state_version = validate_task_state(metadata, plan, repo, final=True)
+    if task_state_version is not None and metadata.get(
+        "final_task_state_version"
+    ) != task_state_version:
+        raise WorkflowError("final task state version does not match completed plan")
     state_version: Optional[int] = None
     if metadata.get("orchestration_state", ""):
         with locked_final_orchestration(metadata, plan, repo) as final_state:
@@ -996,7 +1071,7 @@ def validate_completed_evidence(
         raise WorkflowError("final filesystem artifact digest does not match completed plan")
     expected_fields = {
         "schema": snapshot_module.FINAL_EVIDENCE_SCHEMA,
-        "policy_contract": CURRENT_POLICY_CONTRACT,
+        "policy_contract": policy_contract(metadata),
         "plan_id": metadata["plan_id"],
         "revision": metadata["revision"],
         "approved_revision": metadata["approved_revision"],
@@ -1063,6 +1138,7 @@ def command_check_execute(args: argparse.Namespace) -> None:
     require_approval_record(metadata, revision)
     repo = command_repo(args)
     require_execution_vcs(metadata, repo)
+    validate_task_state(metadata, args.plan, repo)
     print(f"execution allowed for {metadata['plan_id']} revision {revision} in {phase}")
 
 
@@ -1097,7 +1173,7 @@ def command_start_execution(args: argparse.Namespace) -> None:
         )
         if (
             resolved_vcs == "NONE"
-            and policy_contract(updated) == CURRENT_POLICY_CONTRACT
+            and managed_policy(updated)
         ):
             if not args.repo_explicit:
                 raise WorkflowError("current NONE start-execution requires explicit --repo")
@@ -1106,6 +1182,7 @@ def command_start_execution(args: argparse.Namespace) -> None:
             )
             updated = create_bound_baseline(updated, repo)
         updated["phase"] = "IN_PROGRESS"
+        validate_task_state(updated, args.plan, repo)
         write_document(args.plan, updated, order, body)
         print(f"started execution for {updated['plan_id']} revision {revision} at {approved_at}")
         return
@@ -1116,6 +1193,7 @@ def command_start_execution(args: argparse.Namespace) -> None:
         )
     require_approval_record(metadata, revision)
     require_current_none_baseline(metadata, repo)
+    validate_task_state(metadata, args.plan, repo)
     if metadata["confirmation_record"] != confirmation:
         raise WorkflowError("confirmation does not match the recorded approval")
     if supplied_at is not None and str(metadata["approved_at"]) != supplied_at:
@@ -1136,6 +1214,7 @@ def command_complete(args: argparse.Namespace) -> None:
     require_approval_record(metadata, revision)
     repo = command_repo(args)
     require_execution_vcs(metadata, repo)
+    task_state_version = validate_task_state(metadata, args.plan, repo, final=True)
     if metadata.get("orchestration_state", "") and not args.repo_explicit:
         raise WorkflowError("completion with orchestration_state requires explicit --repo")
     with locked_final_orchestration(metadata, args.plan, repo) as final_state:
@@ -1145,6 +1224,8 @@ def command_complete(args: argparse.Namespace) -> None:
         )
         updated = dict(metadata)
         updated["phase"] = "COMPLETED"
+        if task_state_version is not None:
+            updated["final_task_state_version"] = task_state_version
         if state_version is not None:
             updated["final_orchestration_state_version"] = state_version
         if filesystem_evidence is not None:
@@ -1168,6 +1249,7 @@ def command_resume(args: argparse.Namespace) -> None:
     repo = command_repo(args)
     require_execution_vcs(metadata, repo)
     require_current_none_baseline(metadata, repo)
+    validate_task_state(metadata, args.plan, repo)
     if phase == "IN_PROGRESS":
         print(f"execution active for {metadata['plan_id']} revision {revision}")
         return
@@ -1186,9 +1268,33 @@ def command_validate(args: argparse.Namespace) -> None:
         require_execution_vcs(metadata, repo)
         if phase == "COMPLETED":
             validate_completed_evidence(metadata, args.plan, repo)
+        else:
+            validate_task_state(metadata, args.plan, repo)
     else:
         resolve_vcs(metadata, command_repo(args))
     print(f"valid workflow state for {metadata['plan_id']} revision {revision} in {phase}")
+
+
+def command_cleanup_legacy_lock(args: argparse.Namespace) -> None:
+    """Explicitly remove one inactive pre-v0.5 adjacent plan lock."""
+    legacy_lock = args.plan.parent / f".{args.plan.name}.lock"
+    flags = os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(legacy_lock, flags)
+    except FileNotFoundError:
+        print(f"no legacy adjacent lock for {args.plan.name}")
+        return
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise WorkflowError("legacy adjacent lock is held by another process") from exc
+        os.unlink(legacy_lock)
+    finally:
+        os.close(descriptor)
+    print(f"removed inactive legacy adjacent lock for {args.plan.name}")
 
 
 def command_transition(args: argparse.Namespace) -> None:
@@ -1305,6 +1411,14 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument("--repo", type=Path, help="workspace root")
     validate_parser.set_defaults(handler=command_validate)
 
+    cleanup_parser = subparsers.add_parser(
+        "cleanup-legacy-lock",
+        help="explicitly remove one inactive pre-v0.5 adjacent plan lock",
+    )
+    cleanup_parser.add_argument("plan", type=Path)
+    cleanup_parser.add_argument("--repo", type=Path, help="workspace root")
+    cleanup_parser.set_defaults(handler=command_cleanup_legacy_lock)
+
     transition_parser = subparsers.add_parser("transition", help="apply a legal phase transition")
     transition_parser.add_argument("plan", type=Path)
     transition_parser.add_argument("phase", choices=sorted(VALID_PHASES))
@@ -1320,6 +1434,7 @@ def build_parser() -> argparse.ArgumentParser:
         complete_parser,
         resume_parser,
         transition_parser,
+        cleanup_parser,
     ):
         mutation_parser.add_argument("--expected-revision", type=int)
         mutation_parser.add_argument("--expected-phase", choices=sorted(VALID_PHASES))
@@ -1338,7 +1453,7 @@ def main() -> int:
     try:
         normalize_command_paths(args)
         if args.command in MUTATION_COMMANDS:
-            with locked_plan(args.plan):
+            with locked_plan(args.plan, repo=getattr(args, "repo", None)):
                 require_expected_plan(args)
                 args.handler(args)
         else:

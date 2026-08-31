@@ -1,0 +1,24 @@
+{
+  "summary_title": "任务进度",
+  "implementation_label": "实现状态",
+  "verification_label": "验收状态",
+  "evidence_label": "证据",
+  "reason_label": "原因",
+  "summary_implementation": "实现",
+  "summary_verification": "验收",
+  "implementation": {
+    "NOT_STARTED": "⚪ 未开始",
+    "IN_PROGRESS": "🔵 进行中",
+    "COMPLETED": "✅ 已完成",
+    "BLOCKED": "⛔ 已阻塞"
+  },
+  "verification": {
+    "NOT_STARTED": "⚪ 未开始",
+    "IN_PROGRESS": "🔵 进行中",
+    "PARTIAL": "🟡 部分通过",
+    "PASSED": "✅ 已通过",
+    "FAILED": "❌ 未通过",
+    "BLOCKED": "⛔ 已阻塞",
+    "NOT_APPLICABLE": "➖ 不适用"
+  }
+}

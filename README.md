@@ -45,6 +45,12 @@ APPROVED / IN_PROGRESS
 
 The bundled `workflow_state.py` helper validates required fields, revisions, approval records, and legal transitions. It uses only the Python standard library.
 
+## Dual-Dimension Task Status
+
+Implementation and verification are tracked independently, so completed code with pending or partial environment verification is no longer shown as implementation still in progress. Internal JSON is the sole source of truth; generated Markdown summaries and task blocks must not be edited or parsed back from prose or Emoji.
+
+The display supports only Simplified Chinese and English: Chinese conversations use `zh-CN`; every other or unsupported language falls back to `en-US`. Both locales use fixed symbols: ⚪ not started, 🔵 in progress, 🟡 partial, ✅ complete/pass, ❌ failed, ⛔ blocked, and ➖ not applicable. Final completion requires every implementation to be complete and every verification to be passed or explicitly not applicable.
+
 ## Workflow Profiles
 
 Every new plan records one of three profiles. All profiles retain the same approval boundary: planning stops before implementation and execution starts only after the user confirms the current revision.
@@ -154,6 +160,12 @@ python3 plugins/project-workflow/scripts/workflow_state.py experience <plan.md>
 python3 plugins/project-workflow/scripts/workflow_state.py start-execution <plan.md> --repo <repository-root> --confirmation "<user-confirmation>"
 python3 plugins/project-workflow/scripts/workflow_state.py resume <plan.md> --repo <repository-root>
 python3 plugins/project-workflow/scripts/workflow_state.py complete <plan.md> --repo <repository-root>
+python3 plugins/project-workflow/scripts/workflow_state.py cleanup-legacy-lock <plan.md> --repo <repository-root>
+python3 plugins/project-workflow/scripts/task_state.py migrate <plan.md> --repo <repository-root> --display-language en-US
+python3 plugins/project-workflow/scripts/task_state.py start-implementation <plan.md> <task-id> --repo <repository-root>
+python3 plugins/project-workflow/scripts/task_state.py complete-implementation <plan.md> <task-id> --repo <repository-root> --evidence <evidence>
+python3 plugins/project-workflow/scripts/task_state.py start-verification <plan.md> <task-id> --repo <repository-root>
+python3 plugins/project-workflow/scripts/task_state.py pass-verification <plan.md> <task-id> --repo <repository-root> --evidence <evidence>
 python3 plugins/project-workflow/scripts/orchestration_state.py validate <state.json> --plan <plan.md> --repo <repository-root> --final
 python3 plugins/project-workflow/scripts/orchestration_state.py ready <state.json> --plan <plan.md> --repo <repository-root> --agent-only
 python3 plugins/project-workflow/scripts/orchestration_state.py assign <state.json> <task-id> --plan <plan.md> --repo <repository-root> --owner <task-name> --expected-version <state-version>
@@ -162,7 +174,9 @@ python3 plugins/project-workflow/scripts/orchestration_state.py complete <state.
 python3 plugins/project-workflow/scripts/orchestration_state.py inspect <state.json> --repo <repository-root>
 ```
 
-`experience` returns the current business conversation title and heartbeat interval; historical plans derive their title from the first level-one heading or plan ID and default to five minutes. Lifecycle mutations hold a stable plan lock. `start-execution` atomically records the confirmation, validates the approved revision, and for current `NONE` plans creates and approval-binds an immutable baseline before entering `IN_PROGRESS`; optional `--expected-revision`, `--expected-phase`, and `--expected-sha256` values provide explicit compare-and-swap. `resume` is a no-write success for an executing plan and is the only gated route from `BLOCKED` back to execution. `complete` holds the scheduler lock, revalidates every companion task, binds the accepted `state_version`, and for current `NONE` plans recomputes and binds the baseline comparison using companion task scopes or the serial plan's `filesystem_write_scopes`; failed validation leaves the plan unchanged, and Doctor reuses the same final validator. Lower-level commands remain for historical compatibility, but cannot bypass resume. Orchestration mutations increment `state_version` and accept `--expected-version`; releasing an activated Worker requires its runtime identity and `--stopped-evidence`, while a pending reservation uses `--spawn-failed`.
+`experience` returns the current business conversation title and heartbeat interval; historical plans derive their title from the first level-one heading or plan ID and default to five minutes. Lifecycle mutations use an internal stable plan lock and no longer create `.md.lock` files beside plans; old adjacent locks are removed only through `cleanup-legacy-lock`. `task_state.py` stores dual-dimension progress and renders Chinese or English views, while `migrate` conservatively and idempotently converts legacy markers. `start-execution` atomically records confirmation and validates the revision. `resume` is the only gated route from `BLOCKED` back to execution. `complete` validates implementation and verification, binds accepted task and scheduler state versions, and recomputes final `NONE` evidence when applicable. Failed validation leaves the plan unchanged, and Doctor reuses the same final validator.
+
+Concurrent writers can use `--expected-sha256` and `--expected-version` compare-and-swap checks. Releasing an activated Worker requires `--stopped-evidence`; a pending reservation uses `--spawn-failed`.
 
 The helpers strengthen consistency, but they are not authorization or security boundaries and cannot cryptographically prove that natural-language approval is genuine.
 
@@ -214,7 +228,7 @@ Start a new Codex task after the installation.
 
 ## Compatibility and Rollback
 
-Version 0.4 keeps the previous low-level lifecycle commands and accepts v0.3 plans and orchestration state. Missing new optional scheduling fields do not require a migration, a missing `workflow_profile` is treated as `FULL`, and a missing `vcs_mode` is read as `AUTO` without rewriting the historical plan.
+Version 0.5 continues to read v0.4 and earlier plans and orchestration state. Old plans do not require immediate migration; run `task_state.py migrate` explicitly for the conservative dual-dimension view. A missing `workflow_profile` is treated as `FULL`, and a missing `vcs_mode` is read as `AUTO` without rewriting the historical plan.
 
 The source rollback baseline is release `v0.3.0`. Restore or reinstall its archive, or use the corresponding Git tag when developing from a clone. The plugin never resets, commits, tags, pushes, deploys, or overwrites user changes automatically. A local reinstall uses the normal marketplace/cachebuster flow and still requires explicit authorization when it changes the active Codex installation.
 

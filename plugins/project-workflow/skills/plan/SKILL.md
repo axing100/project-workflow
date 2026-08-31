@@ -135,12 +135,16 @@ For `AUTO_MULTI_AGENT`, estimate implementation time and coordination time for e
 
 Default `progress_reporting` to `COMPACT`. Use `DETAILED` only when the user explicitly asks for debug-level workflow output. In compact mode, use user-facing task labels and plain-language phases; do not show raw enum values, runtime agent IDs, canonical `/root/...` task names, plugin cache paths, or state-helper commands. Localize user-facing workflow values to the current conversation language. When a stable enum is useful for traceability, show it only as a secondary parenthetical after a plain-language explanation, never as the sole explanation.
 
+Choose exactly one persisted task-display language: `zh-CN` for a Chinese conversation and
+`en-US` otherwise. Only these two locales are supported. Unsupported or ambiguous language values
+fall back to `en-US`. Keep this choice in internal task state, reuse it across resume and render,
+and never translate user-authored task titles or free-form plan text.
+
 ## Plan Tasks
 
 Break implementation into dependency-aware, commit-sized tasks. For every task record:
 
-- status `[ ]`, `[~]`, `[x]`, or `[!]`;
-- goal, scope, exclusions, prerequisites, risks;
+- goal, scope, exclusions, prerequisites, risks, and stable task ID;
 - observable acceptance criteria;
 - exact validation commands where known;
 - dependencies (`Depends-On`) and a literal repository-relative `Write-Scope` without globs;
@@ -169,6 +173,19 @@ python3 <plugin-root>/scripts/orchestration_state.py validate <state-path> --pla
 Do not create an orchestration JSON for `SINGLE_AGENT`.
 
 Copy applicable quality checklist items into the plan so execution does not depend on this plugin remaining installed.
+
+After every task heading and dependency record exists, initialize the internal task state and
+render its localized, controlled status blocks before requesting confirmation:
+
+```bash
+python3 <plugin-root>/scripts/task_state.py migrate <plan-path> --repo <repo-root> --display-language <zh-CN-or-en-US>
+python3 <plugin-root>/scripts/task_state.py inspect <plan-path> --repo <repo-root>
+```
+
+The internal JSON is the only source of truth for task progress. The Markdown summary and per-task
+status blocks are generated views. Never hand-edit their marker blocks or infer state by parsing
+localized text, icons, acceptance checkboxes, or evidence prose. Historical `[ ]`, `[~]`, `[x]`,
+`[!]`, and `[-]` markers are migrated conservatively by the helper.
 
 For `STANDARD` and `FULL`, select applicable rows from the boundary matrix in the checklist and explicitly mark irrelevant dimensions `N/A` with a reason. For a `FULL` plan that changes persisted state, enumerate old-to-new mappings for every state, including active or orphaned running work, missing and expired leases, unknown states, repeated migration, rollback, and crash re-entry. A generic statement such as "migration is compatible" is not a migration state matrix.
 

@@ -4,6 +4,7 @@
 
 - Ownership and precedence
 - State record
+- Task progress state and localization
 - Allowed transitions
 - Approval semantics
 - Workflow profiles
@@ -58,6 +59,31 @@ New plans must also record `workflow_profile`. Supported values are `LIGHT`, `ST
 New plans must record `vcs_mode` as `AUTO`, `GIT`, or `NONE` and persist the detected `resolved_vcs_mode` as `GIT` or `NONE` before confirmation. Historical plans without `vcs_mode` remain valid and are interpreted as `AUTO`; do not rewrite them merely to add the field.
 
 New plans also persist `rollback_required` as the string `"true"` or `"false"`. Historical plans without it retain profile-based compatibility behavior and are not rewritten merely to add the field.
+
+## Task Progress State and Localization
+
+Task progress is stored under `.codex/project-workflow/<plan-id>/state.json` with schema
+`project-workflow/task-state/v1`. This internal JSON is the sole source of truth. The plan summary
+and per-task status blocks are generated views delimited by controlled comments; only the renderer
+may replace those blocks. Free-form plan text and acceptance checkboxes are never interpreted as
+state.
+
+Implementation and verification are separate dimensions. Implementation supports `NOT_STARTED`,
+`IN_PROGRESS`, `COMPLETED`, and `BLOCKED`. Verification supports `NOT_STARTED`, `IN_PROGRESS`,
+`PARTIAL`, `PASSED`, `FAILED`, `BLOCKED`, and `NOT_APPLICABLE`. Completion evidence is mandatory;
+blockers require reasons. Plan completion requires every implementation to be `COMPLETED` and
+every verification to be `PASSED` or `NOT_APPLICABLE`.
+
+Only `zh-CN` and `en-US` displays are supported. Chinese conversations use `zh-CN`; all other or
+unsupported language values fall back to `en-US`. Both locales use the same icons: ⚪ not started,
+🔵 in progress, 🟡 partial, ✅ complete/pass, ❌ fail, ⛔ blocked, and ➖ not applicable. Localized
+labels and icons are presentation only and are never parsed back into state.
+
+Migrate v0.4 plans explicitly with `task_state.py migrate`. Legacy `[ ]` becomes both dimensions
+not started; `[~]` becomes implementation in progress with verification not started; `[x]`
+becomes completed/passed with migration evidence; `[!]` becomes blocked/blocked; and `[-]`
+becomes completed/not applicable. Repeated migration and rendering are idempotent. Unknown schema
+versions and status values fail closed.
 
 ## Version-Control and Change-Evidence Contract
 
@@ -143,7 +169,7 @@ On valid approval, set `phase=APPROVED`, copy `revision` into `approved_revision
 
 Approval of a plan that explicitly records `AUTO_MULTI_AGENT` or `MANUAL_MULTI_AGENT` authorizes native subagent delegation only for the approved task scopes. It does not authorize commits, pushes, deployments, destructive actions, purchases, credential sharing, or production access. Record those permissions separately.
 
-Use `workflow_state.py start-execution PLAN --confirmation TEXT --repo REPO` as the canonical new-plan entry command. It holds a stable plan lock across the complete read-modify-write, atomically records approval, validates the approved revision and transition legality, and for current `NONE` plans creates or idempotently reuses the baseline bound to that exact approval before entering `IN_PROGRESS`. A conflicting baseline rejects the start without changing the plan or baseline. Lifecycle mutations may also use `--expected-revision`, `--expected-phase`, and `--expected-sha256` for explicit compare-and-swap. Retain lower-level approval, baseline recovery, validation, and positional transition commands only for historical compatibility and recovery. After final acceptance, validate companion orchestration state with `--final`, then use `workflow_state.py complete PLAN --repo REPO`.
+Use `workflow_state.py start-execution PLAN --confirmation TEXT --repo REPO` as the canonical new-plan entry command. It holds a stable plan lock across the complete read-modify-write, atomically records approval, validates the approved revision and transition legality, and for current `NONE` plans creates or idempotently reuses the baseline bound to that exact approval before entering `IN_PROGRESS`. A conflicting baseline rejects the start without changing the plan or baseline. Lifecycle mutations may also use `--expected-revision`, `--expected-phase`, and `--expected-sha256` for explicit compare-and-swap. Retain lower-level approval, baseline recovery, validation, and positional transition commands only for historical compatibility and recovery. After final acceptance, validate companion orchestration state with `--final`, then use `workflow_state.py complete PLAN --repo REPO`. For v0.5 plans this also validates and binds the accepted task-state version.
 
 Use `workflow_state.py resume PLAN --repo REPO` for an already `IN_PROGRESS` or `BLOCKED` plan. It revalidates approval, revision, version-control resolution, and rollback requirements; `IN_PROGRESS` is an idempotent no-write success, and only this command may restore `BLOCKED` to `IN_PROGRESS`. The low-level transition command must reject that bypass.
 

@@ -318,7 +318,7 @@ class ReleaseClosureContractTest(unittest.TestCase):
         self.assertIn("approved_filesystem_policy_sha256", metadata)
         baseline_path = self.repo / str(metadata["filesystem_baseline"])
         baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
-        self.assertEqual("v0.4", baseline["binding"]["policy_contract"])
+        self.assertEqual("v0.5", baseline["binding"]["policy_contract"])
         self.assertEqual("release-closure", baseline["binding"]["plan_id"])
         self.assertEqual(1, baseline["binding"]["revision"])
         self.assertEqual(1, baseline["binding"]["approved_revision"])
