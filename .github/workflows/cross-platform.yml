@@ -38,6 +38,14 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Full native contract suites
         run: python scripts/check_platform.py
+      - name: Install pinned official CLI in runner-only prefix
+        if: always()
+        run: npm install --global --prefix "${{ runner.temp }}/codex-smoke" @openai/codex@0.153.2
+      - name: Real isolated plugin install and update
+        if: always()
+        env:
+          PROJECT_WORKFLOW_CODEX_ROOT: ${{ runner.temp }}/codex-smoke
+        run: python -m unittest discover -s tests -p test_cross_platform_install.py -v
       - name: Preserve platform evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
