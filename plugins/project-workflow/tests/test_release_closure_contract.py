@@ -657,7 +657,11 @@ class ReleaseClosureContractTest(unittest.TestCase):
         outside_state.parent.mkdir(parents=True)
         original_outside = state.read_bytes()
         outside_state.write_bytes(original_outside)
-        real_open = os.open
+        if os.name == "nt":
+            import windows_io
+            real_open = windows_io._open
+        else:
+            real_open = os.open
         swapped = False
 
         def swap_before_temp_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
@@ -668,8 +672,12 @@ class ReleaseClosureContractTest(unittest.TestCase):
                 and basename.startswith(".orchestration.json.")
                 and not basename.endswith(".lock")
             ):
-                state_root.rename(moved_root)
-                state_root.symlink_to(outside, target_is_directory=True)
+                if os.name == "nt":
+                    with self.assertRaises(OSError):
+                        state_root.rename(moved_root)
+                else:
+                    state_root.rename(moved_root)
+                    state_root.symlink_to(outside, target_is_directory=True)
                 swapped = True
             return real_open(path, flags, *args, **kwargs)
 
@@ -686,18 +694,14 @@ class ReleaseClosureContractTest(unittest.TestCase):
             str(self.repo),
         ]
         output = io.StringIO()
-        with mock.patch.object(sys, "argv", argv), mock.patch.object(
-            orchestration_module.os,
-            "open",
-            side_effect=swap_before_temp_open,
-        ), redirect_stdout(output):
+        with mock.patch.object(sys, "argv", argv), mock.patch("windows_io._open" if os.name == "nt" else "os.open", side_effect=swap_before_temp_open), redirect_stdout(output):
             self.assertEqual(0, orchestration_module.main())
 
         self.assertTrue(swapped)
         self.assertIn("blocked T01", output.getvalue())
         self.assertEqual(original_outside, outside_state.read_bytes())
         trusted = json.loads(
-            (moved_root / "release-closure/orchestration.json").read_text(encoding="utf-8")
+            ((state_root if os.name == "nt" else moved_root) / "release-closure/orchestration.json").read_text(encoding="utf-8")
         )
         self.assertEqual("BLOCKED", trusted["tasks"][0]["status"])
 

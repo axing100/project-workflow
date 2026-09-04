@@ -149,7 +149,16 @@ class SecureDirectory:
         validate_component(name)
         if self._windows is not None:
             return self._windows.open_regular(name, flags, mode, delete_access=delete_access)
-        descriptor = os.open(name, flags | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0), mode, dir_fd=self.parent_fd)
+        for attempt in range(3):
+            try:
+                descriptor = os.open(name, flags | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0), mode, dir_fd=self.parent_fd)
+                break
+            except FileNotFoundError:
+                # APFS may report ENOENT during competing create/open calls.
+                # Retry the same anchored, no-follow create; never retry reads.
+                if not flags & os.O_CREAT or flags & os.O_EXCL or attempt == 2:
+                    raise
+                time.sleep(0.01)
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             os.close(descriptor)
             raise OSError("workflow entry is not a regular file: " + name)

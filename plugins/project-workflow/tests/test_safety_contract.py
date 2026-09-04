@@ -347,7 +347,10 @@ class SnapshotSafetyContractTests(unittest.TestCase):
             baseline = ".codex/project-workflow/p/base.json"
             created = run_cli(SNAPSHOT, "create", "--repo", repo, "--output", baseline)
             self.assertEqual(0, created.returncode, created.stderr)
-            target.chmod(target.stat().st_mode | stat.S_IXUSR)
+            if os.name == "nt":
+                target.chmod(stat.S_IREAD)
+            else:
+                target.chmod(target.stat().st_mode | stat.S_IXUSR)
 
             result = run_cli(
                 SNAPSHOT,

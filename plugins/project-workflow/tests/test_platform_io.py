@@ -113,6 +113,33 @@ with SecureDirectory(root,root=root) as directory:
                 os.close(first)
                 os.close(second)
 
+    @unittest.skipIf(os.name == "nt", "POSIX concurrent-create ENOENT contract")
+    def test_create_race_retry_is_bounded(self):
+        """Retry only transient anchored create failures, never ordinary reads."""
+        with platform_io.SecureDirectory(self.root, root=self.root) as directory:
+            real_open = os.open
+            calls = []
+
+            def contested_open(*args, **kwargs):
+                """Inject one transient kernel create failure."""
+                calls.append(args)
+                if len(calls) == 1:
+                    raise FileNotFoundError("concurrent create")
+                return real_open(*args, **kwargs)
+
+            with mock.patch("os.open", side_effect=contested_open):
+                descriptor = directory.open_regular("race.lock", os.O_RDWR | os.O_CREAT)
+                os.close(descriptor)
+            self.assertEqual(2, len(calls))
+            with mock.patch("os.open", side_effect=FileNotFoundError("persistent")) as opening:
+                with self.assertRaises(FileNotFoundError):
+                    directory.open_regular("race.lock", os.O_RDWR | os.O_CREAT)
+                self.assertEqual(3, opening.call_count)
+            with mock.patch("os.open", side_effect=FileNotFoundError("missing")) as opening:
+                with self.assertRaises(FileNotFoundError):
+                    directory.open_regular("missing", os.O_RDONLY)
+                self.assertEqual(1, opening.call_count)
+
     def test_timeout_values_rejected(self):
         for timeout in (-1, float("inf"), float("nan"), True):
             with self.subTest(timeout=timeout), self.assertRaises(ValueError):

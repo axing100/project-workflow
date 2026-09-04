@@ -202,7 +202,7 @@ class WindowsDirectory:
                     validate_component(component)
                     current = current / component
                 try:
-                    handle = _open(current, 0, directory=True)
+                    handle = _open(current, GENERIC_READ, directory=True)
                 except FileNotFoundError:
                     if not create or component is None:
                         raise
@@ -210,7 +210,7 @@ class WindowsDirectory:
                         os.mkdir(_extended(current))
                     except FileExistsError:
                         pass
-                    handle = _open(current, 0, directory=True)
+                    handle = _open(current, GENERIC_READ, directory=True)
                 self.handles.append(handle)
                 _ordinary(handle, directory=True)
         except BaseException:

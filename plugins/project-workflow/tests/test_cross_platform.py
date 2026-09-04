@@ -49,6 +49,7 @@ class CrossPlatformTest(unittest.TestCase):
             root = Path(temporary) / "中文 工作区"
             root.mkdir()
             plan = root / "中文计划.md"
+            plan.write_text("# 中文计划\n", encoding="utf-8")
             self.run_cli("workflow_state.py", "init", plan, "--repo", root,
                          "--plan-id", "unicode", "--vcs-mode", "NONE")
             self.assertIn("unicode", plan.read_text(encoding="utf-8"))

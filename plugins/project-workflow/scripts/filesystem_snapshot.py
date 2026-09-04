@@ -226,8 +226,12 @@ def _hash_secure_file(directory: SecureDirectory, name: str) -> Tuple[int, str, 
     before = directory.stat(name)
     with os.fdopen(directory.open_regular(name, os.O_RDONLY), "rb") as stream:
         opened = os.fstat(stream.fileno())
-        if _identity(before) != _identity(opened):
-            raise SnapshotError(f"workspace file changed before reading: {name}; before={_identity(before)!r}, opened={_identity(opened)!r}")
+        # Windows stat/fstat differ on ctime (creation versus metadata change).
+        # Compare shared identity fields here; retain full same-source checks below.
+        before_key = _identity(before)[:-1] if os.name == "nt" else _identity(before)
+        opened_key = _identity(opened)[:-1] if os.name == "nt" else _identity(opened)
+        if before_key != opened_key:
+            raise SnapshotError(f"workspace file changed before reading: {name}")
         digest = hashlib.sha256()
         size = 0
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):

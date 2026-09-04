@@ -85,6 +85,7 @@ class FilesystemSnapshotTest(unittest.TestCase):
         self.assertEqual(["delete.txt"], result["deleted"])
         self.assertEqual(["delete.txt", "outside.txt"], result["out_of_scope"])
 
+    @unittest.skipIf(os.name == "nt", "POSIX mode bits; Windows uses ACLs and readonly attributes")
     def test_snapshot_records_directory_mode_and_detects_chmod(self) -> None:
         """A new baseline must make directory permission changes visible."""
         source = self.repo / "src"
@@ -192,6 +193,7 @@ class FilesystemSnapshotTest(unittest.TestCase):
         self.assertEqual([], result["added"])
         self.assertEqual([], result["modified"])
 
+    @unittest.skipIf(os.name == "nt", "POSIX executable mode bits do not exist on Windows")
     def test_mode_change_is_detected(self) -> None:
         script = self.repo / "run.sh"
         script.write_text("echo ok\n", encoding="utf-8")
@@ -339,7 +341,11 @@ class FilesystemSnapshotTest(unittest.TestCase):
         target.write_text("safe", encoding="utf-8")
         external = Path(self.temporary_directory.name) / "secret.txt"
         external.write_text("secret", encoding="utf-8")
-        original_open = SNAPSHOT.os.open
+        if os.name == "nt":
+            import windows_io
+            original_open = windows_io._open
+        else:
+            original_open = SNAPSHOT.os.open
         swapped = False
 
         def swap_before_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
@@ -350,9 +356,11 @@ class FilesystemSnapshotTest(unittest.TestCase):
                 os.symlink(str(external), str(target))
             return original_open(path, flags, *args, **kwargs)
 
-        with mock.patch.object(SNAPSHOT.os, "open", side_effect=swap_before_open):
-            with self.assertRaisesRegex(SNAPSHOT.SnapshotError, "cannot safely read"):
+        hook = "windows_io._open" if os.name == "nt" else "os.open"
+        with mock.patch(hook, side_effect=swap_before_open):
+            with self.assertRaisesRegex(SNAPSHOT.SnapshotError, "cannot safely read|cannot inspect workspace"):
                 SNAPSHOT.build_snapshot(self.repo)
+        self.assertTrue(swapped)
 
     def test_regular_file_identity_change_while_reading_fails_closed(self) -> None:
         """A changed descriptor identity must invalidate the snapshot evidence."""
@@ -400,6 +408,7 @@ class FilesystemSnapshotTest(unittest.TestCase):
         record = next(item for item in snapshot["files"] if item["path"] == "src/target.txt")
         self.assertEqual(hashlib.sha256(b"safe").hexdigest(), record["sha256"])
 
+    @unittest.skipIf(os.name == "nt", "POSIX FIFO/socket fixtures; Windows rejects device paths in native backend tests")
     def test_fifo_and_socket_are_rejected(self) -> None:
         """Unsupported workspace entry types must never be silently omitted."""
         fifo = self.repo / "events.fifo"
@@ -421,7 +430,8 @@ class FilesystemSnapshotTest(unittest.TestCase):
     def test_failed_atomic_replace_preserves_old_baseline(self) -> None:
         self.baseline.parent.mkdir(parents=True)
         self.baseline.write_text("old baseline", encoding="utf-8")
-        with mock.patch.object(SNAPSHOT.os, "replace", side_effect=OSError("replace failed")):
+        target = "windows_io._rename" if os.name == "nt" else "os.replace"
+        with mock.patch(target, side_effect=OSError("replace failed")):
             with self.assertRaises(OSError):
                 SNAPSHOT.atomic_write_json(self.baseline, {"schema": "test"})
         self.assertEqual("old baseline", self.baseline.read_text(encoding="utf-8"))
@@ -432,10 +442,25 @@ class FilesystemSnapshotTest(unittest.TestCase):
         self.baseline.parent.mkdir(parents=True)
         with mock.patch.object(SNAPSHOT.os, "fsync", wraps=os.fsync) as sync:
             SNAPSHOT.atomic_write_json(self.baseline, {"schema": "test"})
-        self.assertGreaterEqual(sync.call_count, 2)
+        self.assertGreaterEqual(sync.call_count, 1 if os.name == "nt" else 2)
 
     def test_atomic_write_uses_held_directory_when_parent_is_swapped(self) -> None:
         """A parent symlink swap must not redirect the atomic replacement."""
+        if os.name == "nt":
+            import windows_io
+            real_rename = windows_io._rename
+
+            def guarded_rename(*args, **kwargs):
+                """Attempt the redirect exactly at the native commit boundary."""
+                with self.assertRaises(OSError):
+                    self.baseline.parent.rename(self.baseline.parent.with_name("moved"))
+                return real_rename(*args, **kwargs)
+
+            with mock.patch("windows_io._rename", side_effect=guarded_rename) as commit:
+                SNAPSHOT.atomic_write_json(self.baseline, {"schema": "test"}, self.repo)
+            self.assertTrue(commit.called)
+            self.assertEqual({"schema": "test"}, json.loads(self.baseline.read_text(encoding="utf-8")))
+            return
         parent = self.baseline.parent
         parent.mkdir(parents=True)
         held_parent = parent.with_name("held-parent")
