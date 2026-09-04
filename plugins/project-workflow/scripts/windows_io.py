@@ -176,7 +176,9 @@ def _open(path: Path, access: int, disposition: int = OPEN_EXISTING, directory: 
         if directory and disposition != OPEN_EXISTING:
             options |= 1  # FILE_DIRECTORY_FILE for atomic directory creation.
         native_disposition = {OPEN_EXISTING: 1, OPEN_ALWAYS: 3, CREATE_NEW: 2}[disposition]
-        status = _native.NtCreateFile(ctypes.byref(handle), access | 0x100000,
+        # Native creates do not add Win32's implicit FILE_READ_ATTRIBUTES;
+        # retain that right so every opened object can be type/identity checked.
+        status = _native.NtCreateFile(ctypes.byref(handle), access | 0x100080,
             ctypes.byref(attributes), ctypes.byref(IoStatus()), None, 0,
             SHARE_READ_WRITE, native_disposition, options, None, 0)
         if status < 0:
