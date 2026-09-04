@@ -22,7 +22,7 @@ INSTALLER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(INSTALLER)
 
 
-@unittest.skipUnless(os.environ.get("PROJECT_WORKFLOW_CODEX_ROOT"), "explicit isolated real CLI prefix required; CI enables this suite")
+@unittest.skipUnless(os.environ.get("PROJECT_WORKFLOW_CODEX_ROOT") or os.environ.get("PROJECT_WORKFLOW_CODEX_BIN"), "explicit real CLI path required; CI enables this suite")
 class RealInstallTest(unittest.TestCase):
     """Install and update through the public CLI without touching personal state.
 
@@ -32,8 +32,11 @@ class RealInstallTest(unittest.TestCase):
 
     def test_install_update_restore(self):
         """Verify real CLI cache contents, update and original marketplace restore."""
-        prefix = Path(os.environ["PROJECT_WORKFLOW_CODEX_ROOT"])
-        executable = prefix / ("codex.cmd" if os.name == "nt" else "bin/codex")
+        if os.environ.get("PROJECT_WORKFLOW_CODEX_BIN"):
+            executable = Path(os.environ["PROJECT_WORKFLOW_CODEX_BIN"])
+        else:
+            prefix = Path(os.environ["PROJECT_WORKFLOW_CODEX_ROOT"])
+            executable = prefix / ("codex.cmd" if os.name == "nt" else "bin/codex")
         command = INSTALLER.codex_command(str(executable))
         manifest = ROOT / "plugins/project-workflow/.codex-plugin/plugin.json"
         original = manifest.read_bytes()

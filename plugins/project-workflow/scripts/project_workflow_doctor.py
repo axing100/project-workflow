@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
-from platform_io import configure_stdio, require_capabilities
+from platform_io import SecureDirectory, configure_stdio, require_capabilities
 
 from orchestration_state import (
     OrchestrationError,
@@ -425,6 +425,14 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
     except (OSError, ValueError) as exc:
         issues.append(issue("PLATFORM_UNSUPPORTED", "BLOCKER", str(exc)))
     repo_ok = repo.is_dir() and os.access(repo, os.R_OK | os.X_OK)
+    platform_ok = True
+    if repo_ok:
+        try:
+            with SecureDirectory(repo, root=repo):
+                pass
+        except (OSError, ValueError) as exc:
+            platform_ok = False
+            issues.append(issue("FILESYSTEM_UNSUPPORTED", "BLOCKER", str(exc)))
     state_directory = repo / ".codex/project-workflow"
     state_safe = repo_ok and safe_state_directory(repo, state_directory)
     state_writable = state_safe and writable_directory_target(state_directory)
@@ -531,6 +539,12 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
             "version": ".".join(str(part) for part in sys.version_info[:3]),
         },
         "cli": cli,
+        "filesystem": {
+            "status": "OK" if platform_ok else "BLOCKED",
+            "backend": "win32" if os.name == "nt" else "posix",
+            "directory_fsync": os.name != "nt",
+            "writability_check": "advisory_os_access; writes still enforce OS permissions",
+        },
         "repository": {
             "status": "OK" if repo_ok and state_writable else "BLOCKED",
             "root": str(repo),

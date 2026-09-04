@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import json
+import csv
+import io
 import os
 import subprocess
 import sys
@@ -16,6 +18,8 @@ from pathlib import Path
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+from platform_io import SecureDirectory
 
 
 class CrossPlatformTest(unittest.TestCase):
@@ -68,6 +72,31 @@ class CrossPlatformTest(unittest.TestCase):
             output = ".codex/project-workflow/long/baseline.json"
             self.run_cli("filesystem_snapshot.py", "create", "--repo", root, "--output", output)
             self.run_cli("filesystem_snapshot.py", "compare", "--repo", root, "--baseline", output)
+
+    @unittest.skipUnless(os.name == "nt", "native NTFS ACL write-denial contract")
+    def test_acl_denial_preserves_state(self):
+        """A real ACL rejection must not overwrite existing state or report success."""
+        identity = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"],
+                                  capture_output=True, encoding="utf-8", check=True, timeout=10)
+        sid = next(csv.reader(io.StringIO(identity.stdout)))[1]
+        self.assertTrue(sid.startswith("S-1-"))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "acl-state"
+            root.mkdir()
+            target = root / "state.json"
+            target.write_bytes(b"original")
+            denied = subprocess.run(["icacls", str(root), "/deny", "*" + sid + ":(WD,AD)"],
+                                    capture_output=True, timeout=10)
+            self.assertEqual(0, denied.returncode, denied.stdout + denied.stderr)
+            try:
+                with SecureDirectory(root, root=root) as directory:
+                    with self.assertRaises(PermissionError):
+                        directory.write_atomic(target.name, b"replacement")
+                self.assertEqual(b"original", target.read_bytes())
+            finally:
+                restored = subprocess.run(["icacls", str(root), "/remove:d", "*" + sid],
+                                          capture_output=True, timeout=10)
+                self.assertEqual(0, restored.returncode, restored.stdout + restored.stderr)
 
 
 if __name__ == "__main__":
