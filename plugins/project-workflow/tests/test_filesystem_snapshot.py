@@ -17,6 +17,7 @@ from unittest import mock
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "filesystem_snapshot.py"
+sys.path.insert(0, str(SCRIPT.parent))
 SPEC = importlib.util.spec_from_file_location("filesystem_snapshot", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 SNAPSHOT = importlib.util.module_from_spec(SPEC)

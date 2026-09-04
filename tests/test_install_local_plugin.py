@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -38,6 +39,116 @@ class LocalInstallerTest(unittest.TestCase):
             encoding="utf-8",
         )
         return repo_root
+
+    def test_native_process_preserves_unicode_and_metacharacters(self) -> None:
+        """Real subprocess argument transport must not invoke a command shell."""
+        argument = '中文 空格 & echo hacked | %PATH% !name! ^ "quoted"'
+        result = INSTALLER.run_codex(
+            sys.executable, "-c",
+            "import json,sys; print(json.dumps(sys.argv[1:], ensure_ascii=True))",
+            argument,
+        )
+        self.assertEqual([argument], json.loads(result.stdout))
+
+    def test_windows_native_executable_and_posix_command(self) -> None:
+        """Preserve POSIX entry points and resolve Windows native executables."""
+        with patch.object(INSTALLER, "WINDOWS", False):
+            self.assertEqual(["custom-codex"], INSTALLER.codex_command("custom-codex"))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            native = Path(temp_dir) / "中文 codex.exe"
+            native.touch()
+            with patch.object(INSTALLER, "WINDOWS", True), patch.object(
+                INSTALLER.shutil, "which", return_value=str(native)
+            ):
+                self.assertEqual([str(native.resolve())], INSTALLER.codex_command(str(native)))
+
+    def test_windows_npm_wrapper_bypasses_shell(self) -> None:
+        """Resolve fixed npm metadata without reading or executing batch content."""
+        with tempfile.TemporaryDirectory(prefix="中文 npm & ") as temp_dir:
+            root = Path(temp_dir)
+            launcher = root / "codex.cmd"
+            launcher.write_text("untrusted shell content", encoding="utf-8")
+            node = root / "node.exe"
+            node.touch()
+            package = root / "node_modules/@openai/codex"
+            (package / "bin").mkdir(parents=True)
+            script = package / "bin/codex.js"
+            script.touch()
+            manifest = package / "package.json"
+            manifest.write_text(json.dumps({
+                "name": "@openai/codex", "bin": {"codex": "bin/codex.js"}
+            }), encoding="utf-8")
+            with patch.object(INSTALLER, "WINDOWS", True), patch.object(
+                INSTALLER.shutil, "which", return_value=str(launcher)
+            ):
+                self.assertEqual(
+                    [str(node.resolve()), str(script.resolve())],
+                    INSTALLER.codex_command("codex"),
+                )
+                powershell = root / "codex.ps1"
+                powershell.touch()
+                self.assertEqual(
+                    [str(node.resolve()), str(script.resolve())],
+                    INSTALLER.codex_command(str(powershell)),
+                )
+                manifest.write_text(json.dumps({
+                    "name": "@openai/codex", "bin": {"codex": "../../evil.js"}
+                }), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "entry point"):
+                    INSTALLER.codex_command("codex")
+
+    def test_windows_missing_command_reports_actionable_error(self) -> None:
+        """Missing CLI resolution fails before any marketplace mutation."""
+        with patch.object(INSTALLER, "WINDOWS", True), patch.object(
+            INSTALLER.shutil, "which", return_value=None
+        ):
+            with self.assertRaisesRegex(FileNotFoundError, "Codex executable was not found"):
+                INSTALLER.codex_command("nonexistent-codex-command")
+
+    def test_windows_unknown_wrapper_is_rejected(self) -> None:
+        """Unknown wrappers never reach subprocess execution."""
+        with patch.object(INSTALLER, "WINDOWS", True), patch.object(
+            INSTALLER.shutil, "which", return_value="custom.cmd"
+        ):
+            with self.assertRaisesRegex(ValueError, "official npm"):
+                INSTALLER.codex_command("custom.cmd")
+
+    def test_real_process_install_and_failure_restore(self) -> None:
+        """Exercise isolated marketplace success and failure using native processes.
+
+        This CLI fixture verifies transport/recovery, not a real Codex installation.
+        """
+        with tempfile.TemporaryDirectory(prefix="中文 installer & ") as temp_dir:
+            root = Path(temp_dir)
+            repo = self.create_repository(root).resolve()
+            fixture = root / "fake cli.py"
+            state = root / "marketplace.json"
+            fixture.write_text(
+                "import json,pathlib,sys\n"
+                "state=pathlib.Path(sys.argv[1]); fail=sys.argv[2]=='fail'; args=sys.argv[3:]\n"
+                "if args==['plugin','marketplace','list']:\n"
+                " print('project-workflow-local '+json.loads(state.read_text(encoding='utf-8')))\n"
+                "elif args[:3]==['plugin','marketplace','remove']:\n"
+                " state.write_text(json.dumps(None),encoding='utf-8')\n"
+                "elif args[:3]==['plugin','marketplace','add']:\n"
+                " state.write_text(json.dumps(args[3]),encoding='utf-8')\n"
+                "elif args[:2]==['plugin','add']:\n"
+                " sys.exit(7 if fail else 0)\n"
+                "else: sys.exit(9)\n",
+                encoding="utf-8",
+            )
+            for mode in ("success", "fail"):
+                with self.subTest(mode=mode):
+                    state.write_text(json.dumps(str(repo)), encoding="utf-8")
+                    with patch.object(INSTALLER, "codex_command", return_value=[
+                        sys.executable, "-X", "utf8", str(fixture), str(state), mode
+                    ]):
+                        if mode == "fail":
+                            with self.assertRaises(INSTALLER.subprocess.CalledProcessError):
+                                INSTALLER.install_staged_plugin("fixture", root / "stage & 中文", repo)
+                        else:
+                            INSTALLER.install_staged_plugin("fixture", root / "stage & 中文", repo)
+                    self.assertEqual(str(repo), json.loads(state.read_text(encoding="utf-8")))
 
     def test_staging_copy_gets_cachebuster_without_changing_source(self) -> None:
         """The staged manifest changes while the source manifest remains byte-identical."""

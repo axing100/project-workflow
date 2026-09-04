@@ -4,21 +4,26 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 
 
+from platform_io import SecureDirectory, configure_stdio, file_lock
+
+
+_PLAN_ACCESS = ContextVar("workflow_plan_access", default=None)
 WORKFLOW = "project-workflow/v1"
 VALID_VCS_MODES = {"AUTO", "GIT", "NONE"}
 RESOLVED_VCS_MODES = {"GIT", "NONE"}
@@ -246,11 +251,19 @@ def private_lock_path(path: Path, namespace: str, repo: Optional[Path] = None) -
         root = repo.expanduser().resolve()
         if not path_is_within(target, root):
             raise WorkflowError("lock target must be inside repository")
-        identity = target.relative_to(root).as_posix()
+        identity = os.path.normcase(target.relative_to(root).as_posix()) if os.name == "nt" else target.relative_to(root).as_posix()
         lock_root = root / ".codex/project-workflow/.locks"
+        current = root
+        for component in lock_root.relative_to(root).parts:
+            current = current / component
+            if current.is_symlink() or (current.exists() and getattr(current.lstat(), "st_file_attributes", 0) & 0x400):
+                raise WorkflowError("lock directory must not traverse a symlink or reparse point")
     else:
-        identity = str(target)
-        lock_root = Path(tempfile.gettempdir()) / f"project-workflow-{os.getuid()}" / "locks"
+        identity = os.path.normcase(str(target))
+        if os.name == "nt":
+            lock_root = Path.home().resolve() / ".codex/project-workflow/private-locks"
+        else:
+            lock_root = Path(tempfile.gettempdir()).resolve() / f"project-workflow-{os.getuid()}" / "locks"
         lock_root.mkdir(parents=True, mode=0o700, exist_ok=True)
         try:
             os.chmod(lock_root, 0o700)
@@ -261,56 +274,46 @@ def private_lock_path(path: Path, namespace: str, repo: Optional[Path] = None) -
 
 
 @contextmanager
+def document_access(path: Path):
+    """Reuse the held plan parent so a rename cannot redirect document I/O."""
+    active = _PLAN_ACCESS.get()
+    if active is not None and active[0] == path:
+        yield active[1]
+    else:
+        with SecureDirectory(path.parent.resolve()) as directory:
+            yield directory
+
+
+@contextmanager
 def locked_plan(
     path: Path,
     timeout_seconds: float = PLAN_LOCK_TIMEOUT_SECONDS,
     repo: Optional[Path] = None,
 ):
-    """Hold a stable cross-process lock for a complete plan read-modify-write."""
+    """Lock and anchor a complete plan read-modify-write on either platform."""
     lock_path = private_lock_path(path, "plan", repo)
-    flags = os.O_RDWR | os.O_CREAT
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    access = None
-    if repo is not None:
-        import orchestration_state as orchestration_module
-
+    root = repo.expanduser().resolve() if repo is not None else None
+    with SecureDirectory(lock_path.parent, root=root, create=True) as lock_directory:
+        descriptor = lock_directory.open_regular(lock_path.name, os.O_RDWR | os.O_CREAT)
         try:
-            access = orchestration_module.InternalStateAccess(
-                lock_path, repo, create_parents=True
-            )
-            descriptor = access.open_regular(access.name, flags)
-        except orchestration_module.OrchestrationError as exc:
-            if access is not None:
-                access.close()
-            raise WorkflowError(str(exc)) from exc
-        except Exception:
-            if access is not None:
-                access.close()
-            raise
-    else:
-        descriptor = os.open(lock_path, flags, 0o600)
-    with os.fdopen(descriptor, "a+", encoding="utf-8") as handle:
-        deadline = time.monotonic() + timeout_seconds
-        while True:
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise WorkflowError(f"timed out acquiring plan lock: {path}")
-                time.sleep(0.05)
-        try:
-            yield
+            with file_lock(descriptor, timeout_seconds):
+                with SecureDirectory(path.parent, root=root, create=True) as directory:
+                    token = _PLAN_ACCESS.set((path, directory))
+                    try:
+                        yield
+                    finally:
+                        _PLAN_ACCESS.reset(token)
+        except TimeoutError as exc:
+            raise WorkflowError(f"timed out acquiring plan lock: {path}") from exc
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            if access is not None:
-                access.close()
+            os.close(descriptor)
 
 
 def content_sha256(path: Path) -> str:
     """Return the current plan bytes digest for optional compare-and-swap."""
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    with document_access(path) as directory:
+        with os.fdopen(directory.open_regular(path.name, os.O_RDONLY), "rb") as stream:
+            return hashlib.sha256(stream.read()).hexdigest()
 
 
 def require_expected_plan(args: argparse.Namespace) -> None:
@@ -369,7 +372,9 @@ def parse_document(path: Path) -> Tuple[Dict[str, object], List[str], str]:
     """Return metadata, key order, and the untouched Markdown body."""
     if not path.is_file():
         raise WorkflowError(f"plan file does not exist: {path}")
-    text = path.read_text(encoding="utf-8")
+    with document_access(path) as directory:
+        with os.fdopen(directory.open_regular(path.name, os.O_RDONLY), "r", encoding="utf-8") as stream:
+            text = stream.read()
     lines = text.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":
         return {}, [], text
@@ -418,32 +423,17 @@ def write_document(path: Path, metadata: Dict[str, object], order: List[str], bo
         frontmatter.append("\n")
     content = "".join(frontmatter) + body
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    mode = 0o644
-    if path.exists():
-        stat_result = os.lstat(path)
-        if not path.is_file() or path.is_symlink():
-            raise WorkflowError(f"plan must be a regular file: {path}")
-        mode = stat_result.st_mode & 0o777
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fchmod(handle.fileno(), mode)
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, path)
-        directory_descriptor = os.open(path.parent, os.O_RDONLY)
+    with document_access(path) as directory:
+        mode = 0o644
         try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
-    except Exception:
-        try:
-            os.unlink(temporary_name)
+            existing = directory.stat(path.name)
         except FileNotFoundError:
             pass
-        raise
+        else:
+            if not stat.S_ISREG(existing.st_mode) or getattr(existing, "st_file_attributes", 0) & 0x400:
+                raise WorkflowError(f"plan must be a regular file: {path}")
+            mode = existing.st_mode & 0o777
+        directory.write_atomic(path.name, content.encode("utf-8"), mode=mode)
 
 
 def require_common(metadata: Dict[str, object]) -> Tuple[int, str]:
@@ -1278,22 +1268,19 @@ def command_validate(args: argparse.Namespace) -> None:
 def command_cleanup_legacy_lock(args: argparse.Namespace) -> None:
     """Explicitly remove one inactive pre-v0.5 adjacent plan lock."""
     legacy_lock = args.plan.parent / f".{args.plan.name}.lock"
-    flags = os.O_RDWR
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(legacy_lock, flags)
-    except FileNotFoundError:
-        print(f"no legacy adjacent lock for {args.plan.name}")
-        return
-    try:
+    with document_access(args.plan) as directory:
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
+            descriptor = directory.open_regular(legacy_lock.name, os.O_RDWR, delete_access=True)
+        except FileNotFoundError:
+            print(f"no legacy adjacent lock for {args.plan.name}")
+            return
+        try:
+            with file_lock(descriptor, 0):
+                directory.unlink_fd(descriptor, legacy_lock.name)
+        except TimeoutError as exc:
             raise WorkflowError("legacy adjacent lock is held by another process") from exc
-        os.unlink(legacy_lock)
-    finally:
-        os.close(descriptor)
+        finally:
+            os.close(descriptor)
     print(f"removed inactive legacy adjacent lock for {args.plan.name}")
 
 
@@ -1448,6 +1435,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     """Run the workflow state command."""
+    configure_stdio()
     parser = build_parser()
     args = parser.parse_args()
     try:
@@ -1458,7 +1446,7 @@ def main() -> int:
                 args.handler(args)
         else:
             args.handler(args)
-    except (OSError, WorkflowError) as exc:
+    except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 0

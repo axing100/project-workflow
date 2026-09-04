@@ -10,6 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+from platform_io import configure_stdio, require_capabilities
 
 from orchestration_state import (
     OrchestrationError,
@@ -155,6 +156,8 @@ def check_cli(script: Path, commands: Sequence[str]) -> Tuple[str, str]:
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -203,6 +206,12 @@ def safe_state_directory(repo: Path, state_directory: Path) -> bool:
     for component in state_directory.relative_to(repo).parts:
         current = current / component
         if current.is_symlink():
+            return False
+        try:
+            info = current.lstat()
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        if getattr(info, "st_file_attributes", 0) & 0x400:
             return False
     return True
 
@@ -411,6 +420,10 @@ def run_doctor(args: argparse.Namespace) -> Dict[str, Any]:
     """Collect stable preflight results without mutating the repository."""
     issues: List[Dict[str, str]] = []
     repo = args.repo.expanduser().resolve()
+    try:
+        require_capabilities()
+    except (OSError, ValueError) as exc:
+        issues.append(issue("PLATFORM_UNSUPPORTED", "BLOCKER", str(exc)))
     repo_ok = repo.is_dir() and os.access(repo, os.R_OK | os.X_OK)
     state_directory = repo / ".codex/project-workflow"
     state_safe = repo_ok and safe_state_directory(repo, state_directory)
@@ -549,6 +562,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     """Run Doctor and return a stable blocking-only exit code."""
+    configure_stdio()
     args = build_parser().parse_args()
     result = run_doctor(args)
     if args.json:

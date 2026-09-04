@@ -17,6 +17,7 @@ from orchestration_state import (
     locked_state,
 )
 from workflow_state import WorkflowError, locked_plan, parse_document, write_document
+from platform_io import configure_stdio
 
 
 SCHEMA = "project-workflow/task-state/v1"
@@ -396,7 +397,7 @@ def command_migrate(args: argparse.Namespace) -> None:
         if created:
             with InternalStateAccess(path, args.repo, create_parents=False) as access:
                 try:
-                    os.unlink(access.name, dir_fd=access.parent_fd)
+                    access.unlink()
                 except FileNotFoundError:
                     pass
         raise
@@ -526,6 +527,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     """Run a task-state command with stable public errors."""
+    configure_stdio()
     parser = build_parser()
     args = parser.parse_args()
     args.repo = args.repo.expanduser().resolve()
@@ -537,7 +539,7 @@ def main() -> int:
                     args.handler(args)
         else:
             args.handler(args)
-    except (OSError, WorkflowError, OrchestrationError, TaskStateError) as exc:
+    except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 0

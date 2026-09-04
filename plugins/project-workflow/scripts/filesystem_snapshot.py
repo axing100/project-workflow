@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
+from platform_io import SecureDirectory, configure_stdio, file_lock
 import hashlib
 import json
 import os
@@ -142,6 +142,9 @@ def _hash_regular_file(
     path: Path, dir_fd: Optional[int] = None
 ) -> Tuple[int, str, int]:
     """Hash one regular file through a no-follow descriptor and verify its identity."""
+    if os.name == "nt":
+        with SecureDirectory(path.parent.resolve()) as directory:
+            return _hash_secure_file(directory, path.name)
     digest = hashlib.sha256()
     size = 0
     display_name = os.fspath(path)
@@ -218,6 +221,58 @@ def symlink_record(path: Path) -> Tuple[int, str]:
     return size, digest
 
 
+def _hash_secure_file(directory: SecureDirectory, name: str) -> Tuple[int, str, int]:
+    """Hash the opened identity and reject replacement or concurrent mutation."""
+    before = directory.stat(name)
+    with os.fdopen(directory.open_regular(name, os.O_RDONLY), "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if _identity(before) != _identity(opened):
+            raise SnapshotError(f"workspace file changed before reading: {name}")
+        digest = hashlib.sha256()
+        size = 0
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+            size += len(chunk)
+        finished = os.fstat(stream.fileno())
+        if _identity(opened) != _identity(finished) or size != finished.st_size:
+            raise SnapshotError(f"workspace file changed while reading: {name}")
+    return size, digest.hexdigest(), opened.st_mode & 0o7777
+
+
+def _windows_records(root: Path, current: Path, scopes, excludes, legacy):
+    """Enumerate anchored Windows directories without following reparse points."""
+    with SecureDirectory(current, root=root) as directory:
+        for name in sorted(directory.list_names()):
+            path = current / name
+            relative = PurePosixPath(path.relative_to(root).as_posix())
+            entry = directory.stat(name)
+            is_directory = stat.S_ISDIR(entry.st_mode)
+            if excluded_path(relative, is_directory, excludes, legacy):
+                continue
+            text = relative.as_posix()
+            if getattr(entry, "st_file_attributes", 0) & 0x400:
+                if path_in_scope(text, scopes):
+                    target = directory.readlink(name).encode("utf-8", errors="surrogateescape")
+                    if _identity(entry) != _identity(directory.stat(name)):
+                        raise SnapshotError(f"workspace link changed while reading: {path}")
+                    yield {"path": text, "type": "symlink", "size": len(target),
+                           "sha256": hashlib.sha256(b"symlink\0" + target).hexdigest(),
+                           "mode": entry.st_mode & 0o7777}
+            elif is_directory:
+                if path_intersects_scope(text, scopes):
+                    if text != ".codex":
+                        yield {"path": text, "type": "directory", "mode": entry.st_mode & 0o7777}
+                    yield from _windows_records(root, path, scopes, excludes, legacy)
+            elif path_in_scope(text, scopes):
+                if not stat.S_ISREG(entry.st_mode):
+                    raise SnapshotError(f"unsupported workspace file type: {text}")
+                size, digest, mode = _hash_secure_file(directory, name)
+                if _identity(entry) != _identity(directory.stat(name)):
+                    raise SnapshotError(f"workspace file changed while reading: {path}")
+                yield {"path": text, "type": "file", "size": size,
+                       "sha256": digest, "mode": mode}
+
+
 def build_snapshot(
     repo: Path,
     scopes: Optional[Sequence[str]] = None,
@@ -231,6 +286,13 @@ def build_snapshot(
     normalized_scopes = normalize_scopes(scopes)
     normalized_excludes = normalize_scopes(excludes)
     records: List[Dict[str, Any]] = []
+    if os.name == "nt":
+        try:
+            records = list(_windows_records(root, root, normalized_scopes, normalized_excludes, legacy_ide_excludes))
+        except (OSError, ValueError) as exc:
+            raise SnapshotError(f"cannot inspect workspace: {exc}") from exc
+        return {"schema": SCHEMA, "scopes": normalized_scopes, "excludes": normalized_excludes,
+                "directory_records": True, "files": sorted(records, key=lambda item: item["path"])}
 
     def raise_walk_error(error: OSError) -> None:
         """Reject unreadable or unstable directories instead of omitting evidence."""
@@ -453,90 +515,29 @@ def atomic_write_json(
         or any(character not in "0123456789abcdef" for character in expected_sha256.lower())
     ):
         raise SnapshotError("expected SHA-256 must contain exactly 64 hexadecimal characters")
-    if repo is not None:
-        path, directory_fd = _open_internal_parent_fd(repo, path, create=True)
-    else:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        directory_fd = os.open(path.parent, _directory_flags())
-    temporary_name = f".{path.name}.{secrets.token_hex(8)}"
-    descriptor = -1
-    lock_descriptor = -1
-    try:
-        lock_descriptor = os.open(
-            f".lock-{path.name}",
-            os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | _no_follow_flag(),
-            0o600,
-            dir_fd=directory_fd,
-        )
-        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
-        if expected_sha256 is not None:
-            existing_descriptor = -1
-            try:
-                existing_descriptor = os.open(
-                    path.name,
-                    os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | _no_follow_flag(),
-                    dir_fd=directory_fd,
-                )
-                with os.fdopen(existing_descriptor, "r", encoding="utf-8") as existing_handle:
-                    existing_descriptor = -1
-                    existing_payload = json.load(existing_handle)
-            except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-                raise SnapshotError(f"cannot verify existing JSON for digest-CAS: {exc}") from exc
-            finally:
-                if existing_descriptor >= 0:
-                    os.close(existing_descriptor)
-            actual_sha256 = canonical_json_sha256(existing_payload)
-            if actual_sha256 != expected_sha256.lower():
-                raise SnapshotError(
-                    "existing JSON digest conflict: "
-                    f"expected {expected_sha256.lower()}, found {actual_sha256}"
-                )
-        descriptor = os.open(
-            temporary_name,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
-            | _no_follow_flag(),
-            0o600,
-            dir_fd=directory_fd,
-        )
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            descriptor = -1
-            json.dump(payload, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        if create_only:
-            try:
-                os.link(
-                    temporary_name,
-                    path.name,
-                    src_dir_fd=directory_fd,
-                    dst_dir_fd=directory_fd,
-                    follow_symlinks=False,
-                )
-            except FileExistsError as exc:
-                raise SnapshotError(f"JSON target already exists: {path}") from exc
-            os.unlink(temporary_name, dir_fd=directory_fd)
-        else:
-            os.replace(
-                temporary_name,
-                path.name,
-                src_dir_fd=directory_fd,
-                dst_dir_fd=directory_fd,
-            )
-        os.fsync(directory_fd)
-    except Exception:
+    target = internal_state_path(repo, path) if repo is not None else path.parent.resolve() / path.name
+    root = repo.resolve() if repo is not None else None
+    with SecureDirectory(target.parent, root=root, create=True) as directory:
+        descriptor = directory.open_regular(f".lock-{target.name}", os.O_RDWR | os.O_CREAT)
         try:
-            os.unlink(temporary_name, dir_fd=directory_fd)
-        except FileNotFoundError:
-            pass
-        raise
-    finally:
-        if descriptor >= 0:
+            with file_lock(descriptor):
+                if expected_sha256 is not None:
+                    try:
+                        with os.fdopen(directory.open_regular(target.name, os.O_RDONLY),
+                                       "r", encoding="utf-8") as stream:
+                            existing = json.load(stream)
+                    except (OSError, ValueError) as exc:
+                        raise SnapshotError(f"cannot verify existing JSON for digest-CAS: {exc}") from exc
+                    actual = canonical_json_sha256(existing)
+                    if actual != expected_sha256.lower():
+                        raise SnapshotError(f"existing JSON digest conflict: expected {expected_sha256.lower()}, found {actual}")
+                content = (json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+                try:
+                    directory.write_atomic(target.name, content, create_only=create_only)
+                except FileExistsError as exc:
+                    raise SnapshotError(f"JSON target already exists: {target}") from exc
+        finally:
             os.close(descriptor)
-        if lock_descriptor >= 0:
-            fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
-            os.close(lock_descriptor)
-        os.close(directory_fd)
 
 
 def internal_state_path(repo: Path, path: Path) -> Path:
@@ -580,33 +581,14 @@ def read_snapshot(path: Path, repo: Optional[Path] = None) -> Dict[str, Any]:
 def read_json_document(path: Path, repo: Optional[Path] = None) -> Dict[str, Any]:
     """Read one persisted JSON object with a stable error surface."""
     try:
-        if repo is None:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        else:
-            target, directory_fd = _open_internal_parent_fd(repo, path, create=False)
-            descriptor = -1
-            try:
-                descriptor = os.open(
-                    target.name,
-                    os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | _no_follow_flag(),
-                    dir_fd=directory_fd,
-                )
-                opened = os.fstat(descriptor)
-                if not stat.S_ISREG(opened.st_mode):
-                    raise SnapshotError(f"filesystem JSON is not a regular file: {target}")
-                with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
-                    descriptor = -1
-                    payload = json.load(handle)
-                    finished = os.fstat(handle.fileno())
-                    if _identity(opened) != _identity(finished):
-                        raise SnapshotError(
-                            f"filesystem JSON changed while reading: {target}"
-                        )
-            finally:
-                if descriptor >= 0:
-                    os.close(descriptor)
-                os.close(directory_fd)
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        target = internal_state_path(repo, path) if repo is not None else path.parent.resolve() / path.name
+        with SecureDirectory(target.parent, root=repo.resolve() if repo is not None else None) as directory:
+            with os.fdopen(directory.open_regular(target.name, os.O_RDONLY), "r", encoding="utf-8") as stream:
+                opened = os.fstat(stream.fileno())
+                payload = json.load(stream)
+                if _identity(opened) != _identity(os.fstat(stream.fileno())):
+                    raise SnapshotError(f"filesystem JSON changed while reading: {target}")
+    except (OSError, ValueError) as exc:
         raise SnapshotError(f"cannot read filesystem JSON: {exc}") from exc
     if not isinstance(payload, dict):
         raise SnapshotError("filesystem JSON must contain an object")
@@ -685,6 +667,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     """Execute one snapshot command with a stable error surface."""
+    configure_stdio()
     args = build_parser().parse_args()
     try:
         return args.handler(args)
