@@ -18,6 +18,8 @@ from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "filesystem_snapshot.py"
 sys.path.insert(0, str(SCRIPT.parent))
+import windows_io
+
 SPEC = importlib.util.spec_from_file_location("filesystem_snapshot", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 SNAPSHOT = importlib.util.module_from_spec(SPEC)
@@ -342,7 +344,6 @@ class FilesystemSnapshotTest(unittest.TestCase):
         external = Path(self.temporary_directory.name) / "secret.txt"
         external.write_text("secret", encoding="utf-8")
         if os.name == "nt":
-            import windows_io
             original_open = windows_io._open
         else:
             original_open = SNAPSHOT.os.open
@@ -450,7 +451,6 @@ class FilesystemSnapshotTest(unittest.TestCase):
     def test_atomic_write_uses_held_directory_when_parent_is_swapped(self) -> None:
         """A parent symlink swap must not redirect the atomic replacement."""
         if os.name == "nt":
-            import windows_io
             real_rename = windows_io._rename
 
             def guarded_rename(*args, **kwargs):
