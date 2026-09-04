@@ -2,7 +2,7 @@
 workflow: "project-workflow/v1"
 plan_id: "windows-full-support"
 revision: 1
-phase: "IN_PROGRESS"
+phase: "BLOCKED"
 approved_revision: 1
 approved_at: "2026-09-04T09:38:01+00:00"
 confirmation_record: "执行"
@@ -30,7 +30,7 @@ policy_contract: "v0.5"
 # Windows 完整功能兼容实施计划
 
 <!-- project-workflow:summary:start -->
-> **任务进度** · 实现 5/6 · 验收 0/6
+> **任务进度** · 实现 5/6 · 验收 3/6
 <!-- project-workflow:summary:end -->
 
 设计：[010-Windows完整功能兼容设计](../design/010-Windows完整功能兼容设计.md)
@@ -45,8 +45,8 @@ policy_contract: "v0.5"
 
 <!-- project-workflow:task-status T01:start -->
 - 实现状态：✅ 已完成
-- 验收状态：🟡 部分通过
-- 证据：SecureDirectory及Win32后端、LockFileEx、持句柄原子替换、防reparse与安全参数已实现；15项本机测试11通过4Windows待验；Mac局部回归通过；原生Windows文件句柄锁和安全测试待CI
+- 验收状态：✅ 已通过
+- 证据：SecureDirectory及Win32后端、LockFileEx、持句柄原子替换、防reparse与安全参数已实现；15项本机测试11通过4Windows待验；Mac局部回归通过；原生Windows文件句柄锁和安全测试待CI；源码2628eb9，CI33896351826 Windows3.9/3.12完整通过：句柄相对I/O、LockFileEx竞争/退出释放、FSCTL重解析竞态、目录替换、占用、最长文件名及异常原子性；Mac/Linux回归通过
 <!-- project-workflow:task-status T01:end -->
 
 - Depends-On: none
@@ -71,8 +71,8 @@ policy_contract: "v0.5"
 
 <!-- project-workflow:task-status T02:start -->
 - 实现状态：✅ 已完成
-- 验收状态：🟡 部分通过
-- 证据：Windows exe与官方npm入口安全解析、Unicode参数、失败恢复实现；协调者复核14项安装器测试通过；macOS 14项安装器测试通过，包含真实隔离子进程夹具；Windows及真实Codex隔离安装待CI
+- 验收状态：✅ 已通过
+- 证据：Windows exe与官方npm入口安全解析、Unicode参数、失败恢复实现；协调者复核14项安装器测试通过；macOS 14项安装器测试通过，包含真实隔离子进程夹具；Windows及真实Codex隔离安装待CI；CI 33894138690五组真实Codex0.153.2隔离安装/更新及恢复均通过（含Windows3.9/3.12）；本机0.152.1隔离安装复测通过；个人插件未修改
 <!-- project-workflow:task-status T02:end -->
 
 - Depends-On: none
@@ -96,8 +96,8 @@ policy_contract: "v0.5"
 
 <!-- project-workflow:task-status T03:start -->
 - 实现状态：✅ 已完成
-- 验收状态：🟡 部分通过
-- 证据：生命周期、任务、编排、Doctor与快照已接入；Mac回归发现的临时目录和错误码问题已修复，复测进行中；快照25项通过；全量复测和Windows原生验证待完成
+- 验收状态：✅ 已通过
+- 证据：生命周期、任务、编排、Doctor与快照已接入；Mac回归发现的临时目录和错误码问题已修复，复测进行中；快照25项通过；全量复测和Windows原生验证待完成；CI33896351826五组核心回归通过；GIT/NONE、任务/调度CAS、审批、双语、迁移及快照；独立失败验收/状态丢失门禁24项Windows通过。宿主native-agent桌面验收另由T04/T05保留
 <!-- project-workflow:task-status T03:end -->
 
 - Depends-On: T01
@@ -121,8 +121,9 @@ policy_contract: "v0.5"
 
 <!-- project-workflow:task-status T04:start -->
 - 实现状态：✅ 已完成
-- 验收状态：🟡 部分通过
+- 验收状态：⛔ 已阻塞
 - 证据：已实现五组原生CI、中文/长路径/非UTF8/ACL测试及固定官方CLI隔离安装更新测试；平台缺陷继续由协调者修复，验收不标通过；Mac 264项257通过7跳过；Linux两组及Mac CI通过；Windows真实安装3.12通过，核心安全兼容仍复测中
+- 原因：五组原生CI及隔离安装通过；缺少客户Windows10/11测试机，尚不能验证桌面Codex新任务加载与原生智能体宿主流程，等待用户提供环境或返回验收证据
 <!-- project-workflow:task-status T04:end -->
 
 - Depends-On: T02, T03
@@ -146,8 +147,9 @@ policy_contract: "v0.5"
 
 <!-- project-workflow:task-status T05:start -->
 - 实现状态：✅ 已完成
-- 验收状态：🟡 部分通过
+- 验收状态：⛔ 已阻塞
 - 证据：独立测试与报告已完成，24项Mac22通过2Windows待验；失败验收门禁和迁移状态丢失边界已独立复验通过；Mac独立契约通过；原生Windows全量与桌面宿主仍待验，不标产品验收完成
+- 原因：独立24项在Windows CI全通过；真实Windows native spawn/交接/中断恢复仍需桌面宿主环境，CLI夹具不替代运行时真实性证据
 <!-- project-workflow:task-status T05:end -->
 
 - Depends-On: T04
@@ -171,8 +173,9 @@ policy_contract: "v0.5"
 ## T06 文档、版本与交付
 
 <!-- project-workflow:task-status T06:start -->
-- 实现状态：🔵 进行中
+- 实现状态：⛔ 已阻塞
 - 验收状态：⚪ 未开始
+- 原因：中英文档和交付记录已完成；按批准设计，Windows客户桌面验收不足时不得提升正式版本或宣布交付，等待测试机或验收证据
 <!-- project-workflow:task-status T06:end -->
 
 - Depends-On: T05
@@ -201,6 +204,9 @@ policy_contract: "v0.5"
 - 待确认计划授权范围只包括上述实现/测试与原生智能体委派，不包含远端上传。Windows CI 需要时另行取得将本次源码/测试/文档推送到 https://github.com/axing100/project-workflow.git 的授权，不自动合并或发布。
 
 ## 检查记录
+
+- 2026-09-05：源码 2628eb9 的 CI 33896351826 五组全部通过。Windows Server 2022 / Python 3.9.13、3.12.10 各 290 项中 278 通过、12 个平台专属跳过；Linux 两组及 Mac 通过。固定官方 Codex 0.153.2 的五组隔离安装更新均通过。客户 Windows 10/11 桌面和真实 Windows native-agent 宿主仍缺环境，不能宣布正式交付；已向用户请求可用测试机。版本保留 0.5.0，未打 tag、合并或重装个人插件。
+- 2026-09-05：独立验收发现旧计划显式迁移后可绕过失败验收完成门禁，已修复并由隔离验证者复核；24 项独立契约在 Windows CI 全部通过。本机最终 290 项279通过11跳过；同组51项生命周期单次基线8.603秒、改造后8.795秒。详见交付记录，状态由工具生成，不以复选框冒充任务状态。
 
 - 2026-09-05：用户完成 workflow OAuth 授权，专用分支推送成功。首轮 CI 33892983272 的 Linux 3.9/3.12、macOS 3.12 通过；Windows 3.12 插件测试失败，安装器/编译/Doctor通过。协调者接管 T01/T03 已实现代码的原生缺陷修复，未绕过校验；T04继续进行。
 

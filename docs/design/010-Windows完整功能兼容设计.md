@@ -41,6 +41,14 @@ Windows 不能仅以 exists/resolve 检查之后直接路径写入作为 POSIX �
 - 不调用不存在的 fchmod；Windows 权限使用其 ACL/只读属性语义，不能把 chmod(0700) 宣称为 Windows 私有权限保障。
 - 不承诺各平台完全一致的断电持久性；明确文件同步和目录元数据同步能力，缺失影响既定安全要求时阻止写入而非假成功。
 
+原生验收中的实现细化：只禁止目录删除共享，子项打开/创建使用 `NtCreateFile`
+相对已持有目录句柄查找，并启用 `OBJ_DONT_REPARSE` 与打开重解析点本身的选项。
+目录枚举、文件元数据、链接内容和重命名同样基于句柄，不重新遍历祖先路径。
+禁止目录写共享会使 Windows 内核自身的子项原子重命名失败，因此不再把它作为
+唯一保护；以真实 FSCTL 重解析点竞态和目录替换测试验证等价边界，未关闭路径检查。
+相关语义见 [Microsoft OBJECT_ATTRIBUTES](https://learn.microsoft.com/en-us/windows/win32/api/ntdef/ns-ntdef-_object_attributes)
+和 [NtCreateFile](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile)。
+
 ### 3. 全链路接入与兼容
 
 生命周期、调度、任务状态、Doctor、快照统一接入同一安全层，清除业务脚本对父目录描述符的直接依赖，包括异常清理路径。保持现有 CLI 参数、审批门禁、CAS、调度所有权及中英状态展示。
