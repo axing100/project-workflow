@@ -120,8 +120,9 @@ policy_contract: "v0.5"
 ## T04 原生跨平台测试与 CI
 
 <!-- project-workflow:task-status T04:start -->
-- 实现状态：🔵 进行中
+- 实现状态：⛔ 已阻塞
 - 验收状态：⚪ 未开始
+- 原因：GitHub拒绝包含CI配置的推送：OAuth缺少workflow权限。原生平台失败驱动修复及Windows验收尚未完成，等待用户授权。
 <!-- project-workflow:task-status T04:end -->
 
 - Depends-On: T02, T03
@@ -199,6 +200,11 @@ policy_contract: "v0.5"
 - 待确认计划授权范围只包括上述实现/测试与原生智能体委派，不包含远端上传。Windows CI 需要时另行取得将本次源码/测试/文档推送到 https://github.com/axing100/project-workflow.git 的授权，不自动合并或发布。
 
 ## 检查记录
+
+- 2026-09-04：修复后最终 Mac/CPython 3.9.6 全量 260 项：255 通过、5 跳过，52.010 秒；compileall 通过。跳过项包含 4 项原生 Windows 后端测试及原有平台条件项，不能计为 Windows 通过。此前偶发 ENOENT 在编排专项、5 次并发 CAS 和最终全量中未复现，未据此声称问题已根治。
+
+- 2026-09-04：本地提交 9e6642b 已保存源码、测试和 CI 配置。向 feature/010-windows-support 推送被 GitHub 拒绝：当前 OAuth 凭据仅含 gist/read:org/repo，缺少 workflow scope，无法创建 .github/workflows/cross-platform.yml；远端分支未创建，Windows CI 未运行。需要用户通过 gh auth refresh -h github.com -s workflow 完成授权；不删除 CI 配置绕过权限，也不宣称 Windows 验收通过。
+- 2026-09-04：协调者追加快照集成委派在实际修改前撤回，T03 集成继续由协调者完成。快照专项 25 项、编排专项 50 项、安装器 14 项、重复并发 CAS 5 项本机通过；全量过程中一次锁创建 ENOENT 尚未稳定复现，继续保留待调查事项。
 
 - 2026-09-04 执行授权：用户在明确请求确认本计划，并允许将本次源码、测试、文档提交/推送至 https://github.com/axing100/project-workflow 运行 Windows CI 后，回复“执行”。提交与推送仅限 feature/010-windows-support 的实现与 CI 修复；不合并、不打 tag、不发布、不重装个人插件。
 
