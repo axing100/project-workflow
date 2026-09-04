@@ -171,7 +171,7 @@ policy_contract: "v0.5"
 ## T06 文档、版本与交付
 
 <!-- project-workflow:task-status T06:start -->
-- 实现状态：⚪ 未开始
+- 实现状态：🔵 进行中
 - 验收状态：⚪ 未开始
 <!-- project-workflow:task-status T06:end -->
 

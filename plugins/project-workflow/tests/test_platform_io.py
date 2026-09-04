@@ -59,6 +59,11 @@ class PlatformIOTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 windows_io.validate_component(name)
         windows_io.validate_component("中文 file.json")
+        windows_io.validate_component("x" * 255)
+        with self.assertRaises(ValueError):
+            windows_io.validate_component("x" * 256)
+        with self.assertRaises(ValueError):
+            windows_io.validate_component("😀" * 128)
 
     def test_outside_root_rejected(self):
         with self.assertRaises(ValueError):

@@ -350,7 +350,8 @@ class FilesystemSnapshotTest(unittest.TestCase):
 
         def swap_before_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
             nonlocal swapped
-            if not swapped and os.fspath(path) in {str(target), target.name}:
+            reading_content = os.name != "nt" or flags == windows_io.GENERIC_READ
+            if not swapped and reading_content and os.fspath(path) in {str(target), target.name}:
                 swapped = True
                 target.unlink()
                 os.symlink(str(external), str(target))
@@ -373,7 +374,9 @@ class FilesystemSnapshotTest(unittest.TestCase):
             nonlocal calls
             calls += 1
             result = real_fstat(descriptor)
-            if calls == 2:
+            # Windows metadata discovery itself is now descriptor-based; inject
+            # on the final content fstat, not that earlier no-follow stat call.
+            if calls == (3 if os.name == "nt" else 2):
                 values = list(result)
                 values[stat.ST_MTIME] += 1
                 return os.stat_result(values)
@@ -495,19 +498,26 @@ class FilesystemSnapshotTest(unittest.TestCase):
         (external / self.baseline.name).write_text(
             json.dumps({"source": "external"}), encoding="utf-8"
         )
-        original_open = SNAPSHOT.os.open
+        original_open = windows_io._open if os.name == "nt" else SNAPSHOT.os.open
         swapped = False
 
         def swap_before_file_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
             nonlocal swapped
-            if not swapped and os.fspath(path) == self.baseline.name:
+            if not swapped and os.fspath(path) in {str(self.baseline), self.baseline.name}:
                 swapped = True
-                self.baseline.parent.rename(held_parent)
-                os.symlink(str(external), str(self.baseline.parent))
+                if os.name == "nt":
+                    with self.assertRaises(OSError):
+                        self.baseline.parent.rename(held_parent)
+                else:
+                    self.baseline.parent.rename(held_parent)
+                    os.symlink(str(external), str(self.baseline.parent))
             return original_open(path, flags, *args, **kwargs)
 
-        with mock.patch.object(SNAPSHOT.os, "open", side_effect=swap_before_file_open):
+        patch_target = windows_io if os.name == "nt" else SNAPSHOT.os
+        patch_name = "_open" if os.name == "nt" else "open"
+        with mock.patch.object(patch_target, patch_name, side_effect=swap_before_file_open):
             payload = SNAPSHOT.read_json_document(self.baseline, self.repo)
+        self.assertTrue(swapped)
         self.assertEqual({"source": "trusted"}, payload)
 
     def test_invalid_snapshot_has_stable_cli_error_without_traceback(self) -> None:

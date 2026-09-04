@@ -138,6 +138,8 @@ def validate_component(name: str) -> None:
         raise ValueError("invalid Windows filename: " + repr(name))
     if any(ord(char) < 32 or char in '<>:"/\\|?*' for char in name):
         raise ValueError("invalid Windows filename: " + repr(name))
+    if len(name.encode("utf-16-le")) > 510:
+        raise ValueError("Windows filename exceeds 255 UTF-16 code units")
     device = name.split(".", 1)[0].rstrip(" ").upper()
     if device in ("CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$") or re.fullmatch(r"(?:COM|LPT)[1-9¹²³]", device):
         raise ValueError("reserved Windows device filename: " + repr(name))
