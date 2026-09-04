@@ -30,7 +30,7 @@ policy_contract: "v0.5"
 # Windows 完整功能兼容实施计划
 
 <!-- project-workflow:summary:start -->
-> **任务进度** · 实现 3/6 · 验收 0/6
+> **任务进度** · 实现 5/6 · 验收 0/6
 <!-- project-workflow:summary:end -->
 
 设计：[010-Windows完整功能兼容设计](../design/010-Windows完整功能兼容设计.md)
@@ -120,8 +120,9 @@ policy_contract: "v0.5"
 ## T04 原生跨平台测试与 CI
 
 <!-- project-workflow:task-status T04:start -->
-- 实现状态：🔵 进行中
-- 验收状态：⚪ 未开始
+- 实现状态：✅ 已完成
+- 验收状态：🟡 部分通过
+- 证据：已实现五组原生CI、中文/长路径/非UTF8/ACL测试及固定官方CLI隔离安装更新测试；平台缺陷继续由协调者修复，验收不标通过；Mac 264项257通过7跳过；Linux两组及Mac CI通过；Windows真实安装3.12通过，核心安全兼容仍复测中
 <!-- project-workflow:task-status T04:end -->
 
 - Depends-On: T02, T03
@@ -144,8 +145,9 @@ policy_contract: "v0.5"
 ## T05 独立契约与安全验收
 
 <!-- project-workflow:task-status T05:start -->
-- 实现状态：⚪ 未开始
-- 验收状态：⚪ 未开始
+- 实现状态：✅ 已完成
+- 验收状态：🟡 部分通过
+- 证据：独立测试与报告已完成，24项Mac22通过2Windows待验；失败验收门禁和迁移状态丢失边界已独立复验通过；Mac独立契约通过；原生Windows全量与桌面宿主仍待验，不标产品验收完成
 <!-- project-workflow:task-status T05:end -->
 
 - Depends-On: T04

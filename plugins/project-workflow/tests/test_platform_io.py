@@ -1,6 +1,8 @@
 """Portable native-process contracts for the secure filesystem backend."""
 
 import os
+import ctypes
+import struct
 import subprocess
 import sys
 import tempfile
@@ -180,15 +182,48 @@ with SecureDirectory(root,root=root) as directory:
         self.assertEqual((self.root / "moved/child/state").read_bytes(), b"inside")
 
     @unittest.skipUnless(os.name == "nt", "native Windows in-place reparse protection")
-    def test_windows_directory_write_handle_denied(self):
+    def test_windows_in_place_junction_cannot_escape(self):
+        """Attempt real FSCTL redirection between validation and native open."""
         parent = self.root / "parent"
         parent.mkdir()
-        with platform_io.SecureDirectory(parent, root=self.root):
-            # FSCTL_SET_REPARSE_POINT requires GENERIC_WRITE. Denying this open
-            # prevents mutation even without a rename/delete operation.
-            with self.assertRaises(PermissionError):
+        external = self.root / "external"
+        external.mkdir()
+        target = ("\\??\\" + str(external)).encode("utf-16-le")
+        payload = struct.pack("<HHHH", 0, len(target), len(target) + 2, 0) + target + b"\0\0\0\0"
+        reparse = struct.pack("<IHH", 0xa0000003, len(payload), 0) + payload
+        attempted = False
+        redirected = False
+        original = windows_io._native.NtCreateFile
+
+        def attack(*args):
+            """Mutate after the backend's root check, before the kernel lookup."""
+            nonlocal attempted, redirected
+            if not attempted:
+                attempted = True
                 handle = windows_io._open(parent, windows_io.GENERIC_WRITE, directory=True)
-                windows_io._kernel.CloseHandle(handle)
+                try:
+                    buffer = ctypes.create_string_buffer(reparse)
+                    returned = windows_io.wintypes.DWORD()
+                    redirected = bool(windows_io._kernel.DeviceIoControl(handle, 0x900a4,
+                        buffer, len(reparse), None, 0, ctypes.byref(returned), None))
+                    if not redirected:
+                        self.assertIn(ctypes.get_last_error(), (5, 32, 145, 4390))
+                finally:
+                    windows_io._kernel.CloseHandle(handle)
+            return original(*args)
+
+        try:
+            with platform_io.SecureDirectory(parent, root=self.root) as directory:
+                with mock.patch.object(windows_io._native, "NtCreateFile", side_effect=attack):
+                    try:
+                        directory.write_atomic("state", b"inside")
+                    except OSError:
+                        pass
+            self.assertTrue(attempted)
+            self.assertEqual(list(external.iterdir()), [])
+        finally:
+            if redirected:
+                os.rmdir(parent)
 
     @unittest.skipUnless(os.name == "nt", "native Windows junction, no symlink privilege required")
     def test_windows_junction_rejected(self):

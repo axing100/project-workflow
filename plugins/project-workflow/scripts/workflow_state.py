@@ -889,14 +889,17 @@ def resolve_orchestration_path(metadata: Dict[str, object], repo: Path) -> Optio
 def validate_task_state(
     metadata: Dict[str, object], plan: Path, repo: Path, final: bool = False
 ) -> Optional[int]:
-    """Validate v0.5 task-state linkage and return its state version."""
-    if policy_contract(metadata) != "v0.5":
-        return None
+    """Enforce task gates for current plans and explicitly migrated old plans."""
     import task_state as task_module
 
     try:
         state_path = task_module.task_state_path(repo, str(metadata["plan_id"]))
-        if not task_module.state_exists(state_path, repo):
+        exists = task_module.state_exists(state_path, repo)
+        if policy_contract(metadata) != "v0.5" and not exists:
+            _, _, body = parse_document(plan)
+            if "<!-- project-workflow:summary:start -->" not in body:
+                return None
+        if not exists:
             _, _, body = parse_document(plan)
             if not task_module.TASK_HEADING.search(body):
                 return None

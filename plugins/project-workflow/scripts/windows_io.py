@@ -1,8 +1,8 @@
 """Native Windows local-disk I/O; never substitute checks for handle protection.
 
-Directory handles deny write and delete sharing for their entire lifetime. Therefore a
-checked ancestor cannot subsequently be renamed into a junction during a write.
-File renames and deletions operate on open handles, not a re-resolved source.
+Directory handles deny delete sharing for their entire lifetime. Child operations
+are relative to pinned handles and never traverse a re-resolved ancestor pathname.
+Reparse points are opened without following them and rejected before regular I/O.
 """
 
 from __future__ import annotations
@@ -13,9 +13,11 @@ import os
 import re
 import secrets
 import stat
+import struct
 import time
 from ctypes import wintypes
 from pathlib import Path
+from types import SimpleNamespace
 
 if os.name == "nt":
     import msvcrt
@@ -72,6 +74,27 @@ class IoStatus(ctypes.Structure):
     _fields_ = [("status", ctypes.c_void_p), ("information", ctypes.c_size_t)]
 
 
+class UnicodeString(ctypes.Structure):
+    """Counted native UTF-16 string; backing storage remains caller-owned.
+
+    @author chenjiaxing
+    @since 2026-09-05
+    """
+    _fields_ = [("length", wintypes.USHORT), ("maximum", wintypes.USHORT),
+                ("buffer", wintypes.LPWSTR)]
+
+
+class ObjectAttributes(ctypes.Structure):
+    """Native name lookup anchored to an existing directory handle.
+
+    @author chenjiaxing
+    @since 2026-09-05
+    """
+    _fields_ = [("length", wintypes.ULONG), ("root", wintypes.HANDLE),
+                ("name", ctypes.POINTER(UnicodeString)), ("attributes", wintypes.ULONG),
+                ("security", ctypes.c_void_p), ("quality", ctypes.c_void_p)]
+
+
 def _declare() -> None:
     """Declare pointer-width-safe signatures once, only on Windows."""
     if _kernel is None:
@@ -84,6 +107,7 @@ def _declare() -> None:
         "LockFileEx": ([wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(Overlapped)], wintypes.BOOL),
         "UnlockFileEx": ([wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(Overlapped)], wintypes.BOOL),
         "GetDriveTypeW": ([wintypes.LPCWSTR], wintypes.UINT),
+        "DeviceIoControl": ([wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p], wintypes.BOOL),
     }
     for name, (arguments, result) in signatures.items():
         function = getattr(_kernel, name)
@@ -93,6 +117,10 @@ def _declare() -> None:
     _native.NtSetInformationFile.restype = wintypes.LONG
     _native.RtlNtStatusToDosError.argtypes = [wintypes.LONG]
     _native.RtlNtStatusToDosError.restype = wintypes.ULONG
+    _native.NtCreateFile.argtypes = [ctypes.POINTER(wintypes.HANDLE), wintypes.DWORD, ctypes.POINTER(ObjectAttributes), ctypes.POINTER(IoStatus), ctypes.c_void_p, wintypes.ULONG, wintypes.ULONG, wintypes.ULONG, wintypes.ULONG, ctypes.c_void_p, wintypes.ULONG]
+    _native.NtCreateFile.restype = wintypes.LONG
+    _native.NtQueryDirectoryFile.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(IoStatus), ctypes.c_void_p, wintypes.ULONG, ctypes.c_int, wintypes.BOOLEAN, ctypes.c_void_p, wintypes.BOOLEAN]
+    _native.NtQueryDirectoryFile.restype = wintypes.LONG
 
 
 _declare()
@@ -131,11 +159,33 @@ def _error(path=None):
     return error
 
 
-def _open(path: Path, access: int, disposition: int = OPEN_EXISTING, directory: bool = False):
+def _open(path: Path, access: int, disposition: int = OPEN_EXISTING, directory: bool = False, root_handle=None):
     """Open the entry itself and deny replacement while its handle is alive."""
+    if root_handle is not None:
+        validate_component(path.name)
+        _ordinary(root_handle, directory=True)
+        storage = ctypes.create_unicode_buffer(path.name)
+        length = len(path.name.encode("utf-16-le"))
+        name = UnicodeString(length, length + 2, ctypes.cast(storage, wintypes.LPWSTR))
+        attributes = ObjectAttributes(ctypes.sizeof(ObjectAttributes), root_handle,
+                                      ctypes.pointer(name), 0x1040, None, None)
+        handle = wintypes.HANDLE()
+        # Synchronous, no-follow, handle-relative lookup. Directories allow write
+        # sharing because the filesystem needs it for a child atomic rename.
+        options = OPEN_REPARSE | 0x20 | 0x4000
+        if directory and disposition != OPEN_EXISTING:
+            options |= 1  # FILE_DIRECTORY_FILE for atomic directory creation.
+        native_disposition = {OPEN_EXISTING: 1, OPEN_ALWAYS: 3, CREATE_NEW: 2}[disposition]
+        status = _native.NtCreateFile(ctypes.byref(handle), access | 0x100000,
+            ctypes.byref(attributes), ctypes.byref(IoStatus()), None, 0,
+            SHARE_READ_WRITE, native_disposition, options, None, 0)
+        if status < 0:
+            error = ctypes.WinError(_native.RtlNtStatusToDosError(status))
+            error.filename = os.fspath(path)
+            raise error
+        return handle.value
     flags = OPEN_REPARSE | (BACKUP_SEMANTICS if directory else 0)
-    sharing = 1 if directory else SHARE_READ_WRITE
-    handle = _kernel.CreateFileW(_extended(path), access, sharing, None, disposition, flags, None)
+    handle = _kernel.CreateFileW(_extended(path), access, SHARE_READ_WRITE, None, disposition, flags, None)
     if handle == INVALID_HANDLE:
         raise _error(path)
     return handle
@@ -187,6 +237,7 @@ def _set_info(handle, kind: int, value, size: int) -> None:
 
 def _rename(handle, target: Path, create_only: bool, root_handle) -> None:
     """Rename an already held source, never re-open it by an untrusted path."""
+    _ordinary(root_handle, directory=True)
     encoded = target.name.encode("utf-16-le")
     size = RenameInfo.name.offset + len(encoded)
     # Win32 consumes the path as a wide string even though length excludes NUL.
@@ -207,7 +258,7 @@ def _rename(handle, target: Path, create_only: bool, root_handle) -> None:
 
 
 class WindowsDirectory:
-    """Protect ancestors against deletion and in-place reparse-point mutation."""
+    """Pin ancestors and anchor child I/O without following path redirection."""
 
     def __init__(self, path: Path, create: bool = False):
         require_capabilities()
@@ -223,16 +274,9 @@ class WindowsDirectory:
                 if component is not None:
                     validate_component(component)
                     current = current / component
-                try:
-                    handle = _open(current, GENERIC_READ, directory=True)
-                except FileNotFoundError:
-                    if not create or component is None:
-                        raise
-                    try:
-                        os.mkdir(_extended(current))
-                    except FileExistsError:
-                        pass
-                    handle = _open(current, GENERIC_READ, directory=True)
+                parent = self.handles[-1] if self.handles else None
+                disposition = OPEN_ALWAYS if create and component is not None else OPEN_EXISTING
+                handle = _open(current, GENERIC_READ, disposition, directory=True, root_handle=parent)
                 self.handles.append(handle)
                 _ordinary(handle, directory=True)
         except BaseException:
@@ -260,7 +304,7 @@ class WindowsDirectory:
         if delete_access:
             access |= DELETE
         disposition = CREATE_NEW if flags & os.O_CREAT and flags & os.O_EXCL else OPEN_ALWAYS if flags & os.O_CREAT else OPEN_EXISTING
-        handle = _open(path, access, disposition)
+        handle = _open(path, access, disposition, root_handle=self.handles[-1])
         try:
             _ordinary(handle)
             if flags & os.O_TRUNC and _info(handle).links != 1:
@@ -280,22 +324,81 @@ class WindowsDirectory:
 
     def stat(self, name: str):
         """Read no-follow metadata while ancestor identities are pinned."""
-        return os.lstat(_extended(self._child(name)))
+        handle = _open(self._child(name), 0x80, directory=True, root_handle=self.handles[-1])
+        try:
+            attributes = _info(handle).attributes
+            descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+            handle = None
+            try:
+                info = os.fstat(descriptor)
+                fields = {field: getattr(info, field) for field in dir(info) if field.startswith("st_")}
+                fields["st_file_attributes"] = attributes
+                return SimpleNamespace(**fields)
+            finally:
+                os.close(descriptor)
+        finally:
+            if handle is not None:
+                _kernel.CloseHandle(handle)
 
     def list_names(self):
         """Enumerate a held directory without following children."""
         if not self.handles:
             raise OSError("secure directory is closed")
-        return os.listdir(_extended(self.path))
+        _ordinary(self.handles[-1], directory=True)
+        names = []
+        restart = True
+        while True:
+            buffer = ctypes.create_string_buffer(65536)
+            result = IoStatus()
+            status = _native.NtQueryDirectoryFile(self.handles[-1], None, None, None,
+                ctypes.byref(result), buffer, len(buffer), 12, False, None, restart)
+            if status & 0xffffffff == 0x80000006:  # STATUS_NO_MORE_FILES
+                return names
+            if status < 0:
+                raise ctypes.WinError(_native.RtlNtStatusToDosError(status))
+            restart = False
+            offset = 0
+            data = buffer.raw[:result.information]
+            while True:
+                if offset + 12 > len(data):
+                    raise OSError("invalid native directory enumeration")
+                next_offset, _, length = struct.unpack_from("<III", data, offset)
+                if length % 2 or offset + 12 + length > len(data):
+                    raise OSError("invalid native directory entry")
+                name = data[offset + 12:offset + 12 + length].decode("utf-16-le")
+                if name not in (".", ".."):
+                    names.append(name)
+                if not next_offset:
+                    break
+                if next_offset < 12 + length:
+                    raise OSError("invalid native directory offset")
+                offset += next_offset
 
     def readlink(self, name: str) -> str:
         """Read a symlink/junction payload without traversing its target."""
-        return os.readlink(_extended(self._child(name)))
+        handle = _open(self._child(name), 0, directory=True, root_handle=self.handles[-1])
+        try:
+            buffer = ctypes.create_string_buffer(16384)
+            returned = wintypes.DWORD()
+            if not _kernel.DeviceIoControl(handle, 0x900a8, None, 0, buffer,
+                    len(buffer), ctypes.byref(returned), None):
+                raise _error()
+            data = buffer.raw[:returned.value]
+            if len(data) < 16:
+                raise OSError("invalid Windows reparse data")
+            tag, _, _, offset, length = struct.unpack_from("<IHHHH", data)
+            base = {0xa0000003: 16, 0xa000000c: 20}.get(tag)
+            if base is None or length % 2 or base + offset + length > len(data):
+                raise OSError("unsupported Windows reparse data")
+            target = data[base + offset:base + offset + length].decode("utf-16-le")
+            return "\\\\?\\" + target[4:] if target.startswith("\\??\\") else target
+        finally:
+            _kernel.CloseHandle(handle)
 
     def replace(self, source: str, target: str, create_only: bool = False) -> None:
         """Rename a no-follow source through its DELETE-capable handle."""
         destination = self._child(target)
-        handle = _open(self._child(source), DELETE)
+        handle = _open(self._child(source), DELETE, root_handle=self.handles[-1])
         try:
             _ordinary(handle)
             _rename(handle, destination, create_only, self.handles[-1])
@@ -304,7 +407,7 @@ class WindowsDirectory:
 
     def unlink(self, name: str) -> None:
         """Delete the opened entry itself, never its reparse target."""
-        handle = _open(self._child(name), DELETE, directory=True)
+        handle = _open(self._child(name), DELETE, directory=True, root_handle=self.handles[-1])
         try:
             value = wintypes.BOOLEAN(True)
             _set_info(handle, FILE_DISPOSITION_INFO_CLASS, ctypes.byref(value), ctypes.sizeof(value))
@@ -320,7 +423,7 @@ class WindowsDirectory:
         """Flush and rename one continuously held temporary file handle."""
         destination = self._child(name)
         temporary = self._child("." + name + "." + secrets.token_hex(12) + ".tmp")
-        handle = _open(temporary, GENERIC_WRITE | DELETE, CREATE_NEW)
+        handle = _open(temporary, GENERIC_WRITE | DELETE, CREATE_NEW, root_handle=self.handles[-1])
         descriptor = -1
         published = False
         try:
