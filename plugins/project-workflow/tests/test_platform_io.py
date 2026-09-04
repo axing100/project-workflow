@@ -245,6 +245,17 @@ with SecureDirectory(root,root=root) as directory:
         self.assertEqual(list(target.iterdir()), [])
 
     @unittest.skipUnless(os.name == "nt", "native Windows file-sharing semantics")
+    def test_windows_maximum_component_atomic_write(self):
+        """A valid maximum-length destination must leave room for temp names."""
+        name = "文" * 255
+        with platform_io.SecureDirectory(self.root, root=self.root) as directory:
+            directory.write_atomic(name, b"first", create_only=True)
+            directory.write_atomic(name, b"second")
+            with os.fdopen(directory.open_regular(name, os.O_RDONLY), "rb") as stream:
+                self.assertEqual(stream.read(), b"second")
+            directory.unlink(name)
+
+    @unittest.skipUnless(os.name == "nt", "native Windows file-sharing semantics")
     def test_windows_busy_target_preserved(self):
         with platform_io.SecureDirectory(self.root, root=self.root) as directory:
             directory.write_atomic("state", b"old")

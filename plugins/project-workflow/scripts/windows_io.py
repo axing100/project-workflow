@@ -426,7 +426,9 @@ class WindowsDirectory:
     def write_atomic(self, name: str, content: bytes, create_only: bool = False) -> None:
         """Flush and rename one continuously held temporary file handle."""
         destination = self._child(name)
-        temporary = self._child("." + name + "." + secrets.token_hex(12) + ".tmp")
+        # Leave room for the random suffix even when the destination occupies
+        # the complete 255 UTF-16-unit filename limit (80 code points <= 160 units).
+        temporary = self._child("." + name[:80] + "." + secrets.token_hex(12) + ".tmp")
         handle = _open(temporary, GENERIC_WRITE | DELETE, CREATE_NEW, root_handle=self.handles[-1])
         descriptor = -1
         published = False
