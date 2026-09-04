@@ -352,7 +352,7 @@ class FilesystemSnapshotTest(unittest.TestCase):
         def swap_before_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
             nonlocal swapped
             reading_content = os.name != "nt" or flags == windows_io.GENERIC_READ
-            if not swapped and reading_content and os.fspath(path) in {str(target), target.name}:
+            if not swapped and reading_content and Path(os.fspath(path)).name == target.name:
                 swapped = True
                 target.unlink()
                 os.symlink(str(external), str(target))
@@ -503,7 +503,7 @@ class FilesystemSnapshotTest(unittest.TestCase):
 
         def swap_before_file_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
             nonlocal swapped
-            if not swapped and os.fspath(path) in {str(self.baseline), self.baseline.name}:
+            if not swapped and Path(os.fspath(path)).name == self.baseline.name:
                 swapped = True
                 if os.name == "nt":
                     with self.assertRaises(OSError):
