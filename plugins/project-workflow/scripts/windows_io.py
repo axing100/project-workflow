@@ -20,8 +20,10 @@ from pathlib import Path
 if os.name == "nt":
     import msvcrt
     _kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    _native = ctypes.WinDLL("ntdll", use_last_error=True)
 else:
     _kernel = None
+    _native = None
 
 INVALID_HANDLE = ctypes.c_void_p(-1).value
 GENERIC_READ = 0x80000000
@@ -61,6 +63,15 @@ class RenameInfo(ctypes.Structure):
                 ("length", wintypes.DWORD), ("name", wintypes.WCHAR * 1)]
 
 
+class IoStatus(ctypes.Structure):
+    """Pointer-sized IO_STATUS_BLOCK storage for synchronous native calls.
+
+    @author chenjiaxing
+    @since 2026-09-05
+    """
+    _fields_ = [("status", ctypes.c_void_p), ("information", ctypes.c_size_t)]
+
+
 def _declare() -> None:
     """Declare pointer-width-safe signatures once, only on Windows."""
     if _kernel is None:
@@ -78,6 +89,10 @@ def _declare() -> None:
         function = getattr(_kernel, name)
         function.argtypes = arguments
         function.restype = result
+    _native.NtSetInformationFile.argtypes = [wintypes.HANDLE, ctypes.POINTER(IoStatus), ctypes.c_void_p, wintypes.ULONG, ctypes.c_int]
+    _native.NtSetInformationFile.restype = wintypes.LONG
+    _native.RtlNtStatusToDosError.argtypes = [wintypes.LONG]
+    _native.RtlNtStatusToDosError.restype = wintypes.ULONG
 
 
 _declare()
@@ -170,18 +185,25 @@ def _set_info(handle, kind: int, value, size: int) -> None:
         time.sleep(0.02 * (attempt + 1))
 
 
-def _rename(handle, target: Path, create_only: bool) -> None:
+def _rename(handle, target: Path, create_only: bool, root_handle) -> None:
     """Rename an already held source, never re-open it by an untrusted path."""
-    encoded = _extended(target).encode("utf-16-le")
+    encoded = target.name.encode("utf-16-le")
     size = RenameInfo.name.offset + len(encoded)
     # Win32 consumes the path as a wide string even though length excludes NUL.
     buffer = ctypes.create_string_buffer(max(size + 2, ctypes.sizeof(RenameInfo)))
     header = RenameInfo.from_buffer(buffer)
     header.replace = not create_only
-    header.root = None
+    header.root = root_handle
     header.length = len(encoded)
     ctypes.memmove(ctypes.addressof(buffer) + RenameInfo.name.offset, encoded, len(encoded))
-    _set_info(handle, FILE_RENAME_INFO_CLASS, buffer, ctypes.sizeof(buffer))
+    for attempt in range(6):
+        status = _native.NtSetInformationFile(handle, ctypes.byref(IoStatus()), buffer, ctypes.sizeof(buffer), 10)
+        if status >= 0:
+            return
+        error = ctypes.WinError(_native.RtlNtStatusToDosError(status))
+        if error.winerror not in (32, 33) or attempt == 5:
+            raise error
+        time.sleep(0.02 * (attempt + 1))
 
 
 class WindowsDirectory:
@@ -276,7 +298,7 @@ class WindowsDirectory:
         handle = _open(self._child(source), DELETE)
         try:
             _ordinary(handle)
-            _rename(handle, destination, create_only)
+            _rename(handle, destination, create_only, self.handles[-1])
         finally:
             _kernel.CloseHandle(handle)
 
@@ -312,7 +334,7 @@ class WindowsDirectory:
                     raise OSError("short write while publishing workflow state")
                 view = view[written:]
             os.fsync(descriptor)
-            _rename(msvcrt.get_osfhandle(descriptor), destination, create_only)
+            _rename(msvcrt.get_osfhandle(descriptor), destination, create_only, self.handles[-1])
             published = True
         finally:
             live_handle = msvcrt.get_osfhandle(descriptor) if descriptor >= 0 else handle
