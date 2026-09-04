@@ -174,13 +174,14 @@ def _rename(handle, target: Path, create_only: bool) -> None:
     """Rename an already held source, never re-open it by an untrusted path."""
     encoded = _extended(target).encode("utf-16-le")
     size = RenameInfo.name.offset + len(encoded)
-    buffer = ctypes.create_string_buffer(max(size, ctypes.sizeof(RenameInfo)))
+    # Win32 consumes the path as a wide string even though length excludes NUL.
+    buffer = ctypes.create_string_buffer(max(size + 2, ctypes.sizeof(RenameInfo)))
     header = RenameInfo.from_buffer(buffer)
     header.replace = not create_only
     header.root = None
     header.length = len(encoded)
     ctypes.memmove(ctypes.addressof(buffer) + RenameInfo.name.offset, encoded, len(encoded))
-    _set_info(handle, FILE_RENAME_INFO_CLASS, buffer, size)
+    _set_info(handle, FILE_RENAME_INFO_CLASS, buffer, ctypes.sizeof(buffer))
 
 
 class WindowsDirectory:

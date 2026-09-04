@@ -227,7 +227,7 @@ def _hash_secure_file(directory: SecureDirectory, name: str) -> Tuple[int, str, 
     with os.fdopen(directory.open_regular(name, os.O_RDONLY), "rb") as stream:
         opened = os.fstat(stream.fileno())
         if _identity(before) != _identity(opened):
-            raise SnapshotError(f"workspace file changed before reading: {name}")
+            raise SnapshotError(f"workspace file changed before reading: {name}; before={_identity(before)!r}, opened={_identity(opened)!r}")
         digest = hashlib.sha256()
         size = 0
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
