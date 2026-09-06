@@ -88,7 +88,7 @@ class FilesystemRaceContractTest(unittest.TestCase):
                     exchanged_once.set()
                     target.unlink(missing_ok=True)
                     os.replace(hold, target)
-                except FileNotFoundError:
+                except (FileNotFoundError, PermissionError):
                     continue
 
         thread = threading.Thread(target=attack, daemon=True)
@@ -130,10 +130,10 @@ class FilesystemRaceContractTest(unittest.TestCase):
             while not stop.is_set():
                 try:
                     os.replace(data, hold)
-                    os.symlink(self.external, data)
+                    os.symlink(self.external, data, target_is_directory=True)
                     data.unlink(missing_ok=True)
                     os.replace(hold, data)
-                except FileNotFoundError:
+                except (FileNotFoundError, PermissionError):
                     continue
 
         thread = threading.Thread(target=attack, daemon=True)
@@ -156,6 +156,7 @@ class FilesystemRaceContractTest(unittest.TestCase):
             stop.set()
             thread.join(timeout=2)
 
+    @unittest.skipIf(os.name == "nt", "POSIX FIFO fixture is unavailable on Windows")
     def test_fifo_fails_closed_without_overwriting_old_evidence(self) -> None:
         """Never block on or serialize a FIFO."""
         self.baseline.parent.mkdir(parents=True)
@@ -170,6 +171,8 @@ class FilesystemRaceContractTest(unittest.TestCase):
 
     def test_socket_fails_closed_without_overwriting_old_evidence(self) -> None:
         """Never serialize a process-bound Unix socket."""
+        if not hasattr(socket, "AF_UNIX"):
+            self.skipTest("host Python has no POSIX Unix socket fixture")
         self.baseline.parent.mkdir(parents=True)
         old = b'{"trusted":"old-evidence"}\n'
         self.baseline.write_bytes(old)
@@ -196,6 +199,7 @@ class FilesystemRaceContractTest(unittest.TestCase):
             raise
         self.create(expected=2)
 
+    @unittest.skipIf(os.name == "nt", "POSIX directory chmod bits; legacy baseline compatibility is covered separately")
     def test_directory_mode_is_evidence_and_legacy_baseline_remains_readable(self) -> None:
         """Expose new directory modes without inventing them for old evidence."""
         source = self.repo / "src"

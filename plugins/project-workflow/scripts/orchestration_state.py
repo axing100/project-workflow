@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import math
 import os
@@ -20,6 +19,8 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+
+from platform_io import SecureDirectory, configure_stdio, file_lock, require_capabilities
 
 from workflow_state import WorkflowError, parse_document, private_lock_path, require_common
 
@@ -112,50 +113,19 @@ def path_is_internal_lexically(path: Path, repo: Path) -> bool:
 
 
 class InternalStateAccess:
-    """Anchor internal scheduler I/O to one trusted parent-directory descriptor."""
+    """Bind state operations to a trusted cross-platform directory handle."""
 
     def __init__(self, path: Path, repo: Path, create_parents: bool) -> None:
-        require_fd_filesystem_support()
         self.repo = repo.expanduser().resolve()
         self.path = require_internal_state_path(path, self.repo)
-        relative = self.path.relative_to(self.repo)
-        self.name = relative.name
-        descriptor = os.open(
-            self.repo,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-        )
-        try:
-            for component in relative.parts[:-1]:
-                try:
-                    next_descriptor = os.open(
-                        component,
-                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                        dir_fd=descriptor,
-                    )
-                except FileNotFoundError:
-                    if not create_parents:
-                        raise
-                    try:
-                        os.mkdir(component, 0o700, dir_fd=descriptor)
-                    except FileExistsError:
-                        pass
-                    next_descriptor = os.open(
-                        component,
-                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                        dir_fd=descriptor,
-                    )
-                os.close(descriptor)
-                descriptor = next_descriptor
-        except Exception:
-            os.close(descriptor)
-            raise
-        self.parent_fd = descriptor
+        self.name = self.path.name
+        self.directory = SecureDirectory(self.path.parent, root=self.repo, create=create_parents)
+        self.parent_fd = self.directory.parent_fd
 
     def close(self) -> None:
-        """Close the held parent-directory descriptor."""
-        if self.parent_fd >= 0:
-            os.close(self.parent_fd)
-            self.parent_fd = -1
+        """Release owned directory handles on either platform."""
+        self.directory.close()
+        self.parent_fd = -1
 
     def __enter__(self) -> "InternalStateAccess":
         return self
@@ -164,24 +134,15 @@ class InternalStateAccess:
         self.close()
 
     def matches(self, path: Path) -> bool:
-        """Return whether a caller refers to this anchored state leaf."""
+        """Return whether a caller names this anchored state leaf."""
         return lexical_absolute(path) == self.path
 
     def open_regular(self, name: str, flags: int, mode: int = 0o600) -> int:
-        """Open one non-link regular file relative to the trusted parent."""
-        descriptor = os.open(
-            name,
-            flags | os.O_NOFOLLOW,
-            mode,
-            dir_fd=self.parent_fd,
-        )
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            os.close(descriptor)
-            raise OrchestrationError(f"orchestration state entry is not a regular file: {name}")
-        return descriptor
+        """Open a literal regular child without following links."""
+        return self.directory.open_regular(name, flags, mode)
 
     def exists(self) -> bool:
-        """Return whether the anchored state leaf exists as a regular file."""
+        """Check existence without following a redirected state entry."""
         try:
             descriptor = self.open_regular(self.name, os.O_RDONLY)
         except FileNotFoundError:
@@ -190,13 +151,11 @@ class InternalStateAccess:
         return True
 
     def load(self) -> Dict[str, Any]:
-        """Load JSON through the anchored state descriptor."""
+        """Read one complete JSON object through a protected descriptor."""
         try:
             descriptor = self.open_regular(self.name, os.O_RDONLY)
         except FileNotFoundError as exc:
-            raise OrchestrationError(
-                f"orchestration state does not exist: {self.path}"
-            ) from exc
+            raise OrchestrationError(f"orchestration state does not exist: {self.path}") from exc
         try:
             with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
                 state = json.load(handle)
@@ -207,64 +166,21 @@ class InternalStateAccess:
         return state
 
     def open_lock(self) -> int:
-        """Open the scheduler lock relative to the same trusted parent."""
-        lock_name = f".{self.name}.lock"
-        for attempt in range(4):
-            try:
-                return self.open_regular(
-                    lock_name,
-                    os.O_RDWR | os.O_CREAT,
-                )
-            except FileNotFoundError:
-                if attempt == 3:
-                    raise
-                time.sleep(0.01)
-        raise AssertionError("unreachable lock retry state")
+        """Open the stable lock used by all writers of this state."""
+        return self.open_regular(f".{self.name}.lock", os.O_RDWR | os.O_CREAT)
 
     def write(self, content: str) -> None:
-        """Fsync and atomically replace state within the anchored parent."""
-        temporary_name = ""
-        descriptor = -1
-        for _ in range(32):
-            temporary_name = f".{self.name}.{secrets.token_hex(8)}.tmp"
-            try:
-                descriptor = self.open_regular(
-                    temporary_name,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                )
-                break
-            except FileExistsError:
-                continue
-        if descriptor < 0:
-            raise OrchestrationError("could not allocate a temporary orchestration state file")
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                handle.write(content)
-                handle.flush()
-                os.fsync(handle.fileno())
-            descriptor = -1
-            os.rename(
-                temporary_name,
-                self.name,
-                src_dir_fd=self.parent_fd,
-                dst_dir_fd=self.parent_fd,
-            )
-            temporary_name = ""
-            os.fsync(self.parent_fd)
-        finally:
-            if descriptor >= 0:
-                os.close(descriptor)
-            if temporary_name:
-                try:
-                    os.unlink(temporary_name, dir_fd=self.parent_fd)
-                except FileNotFoundError:
-                    pass
+        """Flush and atomically publish UTF-8 bytes inside the held directory."""
+        self.directory.write_atomic(self.name, content.encode("utf-8"))
+
+    def unlink(self) -> None:
+        """Remove the bound state during a failed migration without dir_fd."""
+        self.directory.unlink(self.name)
 
 
 def require_fd_filesystem_support() -> None:
-    """Fail closed when the Unix descriptor-relative safety contract is unavailable."""
-    if not HAS_FD_FILESYSTEM_SUPPORT:
-        raise OrchestrationError("descriptor-relative orchestration I/O is unavailable")
+    """Validate the available native backend, not a POSIX-only feature set."""
+    require_capabilities()
 
 
 _ACTIVE_STATE_ACCESS: ContextVar[Optional[InternalStateAccess]] = ContextVar(
@@ -341,47 +257,29 @@ def locked_state(
     timeout_seconds: float = 5.0,
     repo: Optional[Path] = None,
 ):
-    """Hold a bounded cross-process lock for one complete state mutation."""
+    """Hold a bounded native OS lock for one complete state mutation."""
     if repo is not None:
         with InternalStateAccess(path, repo, create_parents=True) as access:
             descriptor = access.open_lock()
             try:
-                deadline = time.monotonic() + timeout_seconds
-                while True:
-                    try:
-                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        break
-                    except BlockingIOError:
-                        if time.monotonic() >= deadline:
-                            raise OrchestrationError(
-                                f"timed out acquiring state lock: {path}"
-                            )
-                        time.sleep(0.05)
-                with bound_state_access(access):
-                    yield access
+                with file_lock(descriptor, timeout_seconds):
+                    with bound_state_access(access):
+                        yield access
+            except TimeoutError as exc:
+                raise OrchestrationError(f"timed out acquiring state lock: {path}") from exc
             finally:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
                 os.close(descriptor)
         return
     lock_path = private_lock_path(path, "orchestration")
-    flags = os.O_RDWR | os.O_CREAT
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = os.open(lock_path, flags, 0o600)
-    with os.fdopen(descriptor, "a+", encoding="utf-8") as handle:
-        deadline = time.monotonic() + timeout_seconds
-        while True:
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise OrchestrationError(f"timed out acquiring state lock: {path}")
-                time.sleep(0.05)
+    with SecureDirectory(lock_path.parent.resolve()) as directory:
+        descriptor = directory.open_regular(lock_path.name, os.O_RDWR | os.O_CREAT)
         try:
-            yield
+            with file_lock(descriptor, timeout_seconds):
+                yield
+        except TimeoutError as exc:
+            raise OrchestrationError(f"timed out acquiring state lock: {path}") from exc
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            os.close(descriptor)
 
 
 def require_expected_version(path: Path, expected: Optional[int]) -> None:
@@ -481,7 +379,7 @@ def require_internal_state_path(path: Path, repo: Path) -> Path:
 def repository_case_sensitive(repo: Optional[Path]) -> bool:
     """Detect case sensitivity from an existing repository path without writing probes."""
     if repo is None:
-        return sys.platform != "darwin"
+        return sys.platform not in ("darwin", "win32")
     resolved = repo.expanduser().resolve()
     parts = resolved.parts
     for index, component in enumerate(parts):
@@ -1766,6 +1664,7 @@ def prepare_cli_context(args: argparse.Namespace) -> None:
 def main() -> int:
     """Run the orchestration state command."""
     parser = build_parser()
+    configure_stdio()
     args = parser.parse_args()
     try:
         prepare_cli_context(args)
@@ -1782,7 +1681,7 @@ def main() -> int:
                 args.handler(args)
         else:
             args.handler(args)
-    except (OSError, WorkflowError, OrchestrationError) as exc:
+    except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 0

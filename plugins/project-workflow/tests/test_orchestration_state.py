@@ -578,7 +578,11 @@ class OrchestrationStateTest(unittest.TestCase):
         outside_state.parent.mkdir()
         original_outside = self.state.read_bytes()
         outside_state.write_bytes(original_outside)
-        real_open = os.open
+        if os.name == "nt":
+            import windows_io
+            real_open = windows_io._open
+        else:
+            real_open = os.open
         swapped = False
 
         def swap_before_temporary_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
@@ -590,8 +594,12 @@ class OrchestrationStateTest(unittest.TestCase):
                 and basename.startswith(".orchestration.json.")
                 and not basename.endswith(".lock")
             ):
-                state_root.rename(moved_root)
-                state_root.symlink_to(outside, target_is_directory=True)
+                if os.name == "nt":
+                    with self.assertRaises(OSError):
+                        state_root.rename(moved_root)
+                else:
+                    state_root.rename(moved_root)
+                    state_root.symlink_to(outside, target_is_directory=True)
                 swapped = True
             return real_open(path, flags, *args, **kwargs)
 
@@ -607,12 +615,10 @@ class OrchestrationStateTest(unittest.TestCase):
             "--repo",
             str(self.repo),
         ]
-        with mock.patch.object(sys, "argv", arguments), mock.patch.object(
-            orchestration_module.os, "open", side_effect=swap_before_temporary_open
-        ):
+        with mock.patch.object(sys, "argv", arguments), mock.patch("windows_io._open" if os.name == "nt" else "os.open", side_effect=swap_before_temporary_open):
             self.assertEqual(0, orchestration_module.main())
 
-        trusted_state = moved_root / "scheduler-test/orchestration.json"
+        trusted_state = (state_root if os.name == "nt" else moved_root) / "scheduler-test/orchestration.json"
         self.assertTrue(swapped)
         self.assertEqual(original_outside, outside_state.read_bytes())
         self.assertEqual(
@@ -633,8 +639,12 @@ class OrchestrationStateTest(unittest.TestCase):
         original_inspect = orchestration_module.command_inspect
 
         def swap_before_inspect(args: object) -> None:
-            state_root.rename(moved_root)
-            state_root.symlink_to(outside, target_is_directory=True)
+            if os.name == "nt":
+                with self.assertRaises(OSError):
+                    state_root.rename(moved_root)
+            else:
+                state_root.rename(moved_root)
+                state_root.symlink_to(outside, target_is_directory=True)
             original_inspect(args)
 
         arguments = [

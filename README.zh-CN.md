@@ -92,8 +92,12 @@ Git 不是运行 Project Workflow 的必需条件。每份新计划都会记录�
 ## 环境要求
 
 - 支持插件的 Codex Desktop 或 CLI
-- Python 3，用于执行工作流状态脚本
+- CPython 3.9+；macOS/Linux 使用 `python3`，Windows 使用 `py -3` 或已确认版本的 `python`
 - 只有从 GitHub 克隆或参与开发时需要 Git；压缩包安装和工作流执行支持无 Git 环境
+
+原生 Windows 兼容目前仍在专用分支验收，尚未作为全平台可用版本发布。
+参见[跨平台命令、安全边界与恢复说明](plugins/project-workflow/references/platform-support.md)。
+Windows Server CI 与客户 Windows 10/11、原生智能体宿主验收分别记录。
 
 规划前会执行一次安静、只读的 Doctor 预检，检查插件清单与辅助脚本、Python 能力、仓库状态目录以及可选的计划/调度 revision 兼容性。Doctor 不猜测原生智能体容量，该字段稳定返回 `UNKNOWN`；实际槽位由 Codex 原生运行时决定。只有阻塞项会中止规划。显式传入的外部插件根只做静态检查，一律视为不可信且不会执行其中脚本。
 

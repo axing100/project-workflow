@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import secrets
 import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +19,7 @@ from typing import Optional
 
 PLUGIN_NAME = "project-workflow"
 MARKETPLACE_NAME = "project-workflow-local"
+WINDOWS = os.name == "nt"
 MANIFEST_RELATIVE_PATH = Path(".codex-plugin/plugin.json")
 MARKETPLACE_RELATIVE_PATH = Path(".agents/plugins/marketplace.json")
 SEMVER_PATTERN = re.compile(
@@ -124,13 +127,62 @@ def create_staging_marketplace(
     return staged_version
 
 
+def codex_command(codex_bin: str) -> list[str]:
+    """Resolve Windows launchers without ever interpreting shell syntax.
+
+    Native executables and the official npm package layout are supported. Batch
+    and PowerShell wrappers are never executed: their adjacent package metadata
+    identifies the fixed JavaScript entry point, which is passed directly to Node.
+    """
+    if not WINDOWS:
+        return [codex_bin]
+    explicit = Path(codex_bin).expanduser()
+    found = (
+        str(explicit)
+        if (explicit.is_absolute() or explicit.parent != Path(".")) and explicit.is_file()
+        else shutil.which(codex_bin)
+    )
+    if found is None:
+        raise FileNotFoundError(f"Codex executable was not found: {codex_bin}")
+    launcher = Path(found).resolve()
+    if launcher.suffix.lower() == ".exe":
+        return [str(launcher)]
+    native = launcher.with_suffix(".exe")
+    if native.is_file():
+        return [str(native)]
+    if launcher.name.lower() not in ("codex", "codex.cmd", "codex.ps1"):
+        raise ValueError("Use a native Codex .exe or the official npm Codex launcher.")
+    package = launcher.parent / "node_modules" / "@openai" / "codex"
+    metadata_path = package / "package.json"
+    if not metadata_path.is_file():
+        raise ValueError("Unsupported Codex wrapper: official npm package was not found.")
+    metadata = load_json(metadata_path)
+    binary = metadata.get("bin")
+    entry = binary.get("codex") if isinstance(binary, dict) else binary
+    if metadata.get("name") != "@openai/codex" or entry not in (
+        "bin/codex.js", "./bin/codex.js"
+    ):
+        raise ValueError("Unsupported Codex npm package entry point.")
+    script = package / "bin" / "codex.js"
+    if not script.is_file() or package.resolve() not in script.resolve().parents:
+        raise ValueError("Codex npm entry point is missing or escapes its package.")
+    adjacent_node = launcher.parent / "node.exe"
+    node = str(adjacent_node) if adjacent_node.is_file() else shutil.which("node.exe")
+    if node is None or Path(node).suffix.lower() != ".exe":
+        raise FileNotFoundError("Native node.exe is required for the npm Codex launcher.")
+    return [str(Path(node).resolve()), str(script.resolve())]
+
+
 def run_codex(codex_bin: str, *arguments: str) -> subprocess.CompletedProcess[str]:
-    """Run one Codex plugin command and capture text output."""
+    """Run Codex directly with Unicode arguments, never through cmd or PowerShell."""
     return subprocess.run(
-        [codex_bin, *arguments],
+        [*codex_command(codex_bin), *arguments],
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
+        shell=False,
     )
 
 
@@ -216,6 +268,9 @@ def install_staged_plugin(
 
 def main() -> None:
     """Create a disposable marketplace, install it, and remove the staging files."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
     args = parse_args()
     repo_root = args.repo_root.expanduser().resolve()
     cachebuster = sanitize_cachebuster(args.cachebuster or default_cachebuster())

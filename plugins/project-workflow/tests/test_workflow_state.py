@@ -471,6 +471,7 @@ class WorkflowStateTest(unittest.TestCase):
                 )
                 self.assertEqual(before, self.plan.read_bytes())
 
+    @unittest.skipIf(os.name == "nt", "POSIX permission-bit preservation; Windows uses inherited ACLs")
     def test_plan_writes_preserve_existing_mode(self) -> None:
         """Keep the user's Markdown permissions across atomic replacement."""
         os.chmod(self.plan, 0o644)

@@ -94,8 +94,13 @@ Execution defaults to compact progress: phase changes, one aggregate wave-start 
 ## Requirements
 
 - Codex Desktop or CLI with plugin support
-- Python 3 for the workflow state helper
+- CPython 3.9+ for the workflow helpers (`python3` on macOS/Linux; `py -3` or verified `python` on Windows)
 - Git only when cloning from GitHub or contributing; archive installation and workflow execution support environments without Git
+
+Native Windows compatibility is currently undergoing acceptance on the Windows-support
+branch; it is not yet a released all-platform guarantee. See
+[platform commands, safety limits and recovery](plugins/project-workflow/references/platform-support.md).
+Windows Server CI and customer Windows 10/11/native-agent host acceptance are recorded separately.
 
 Before planning, the workflow runs a quiet read-only Doctor preflight. It checks the plugin manifest and helpers, Python capabilities, repository state paths, and optional plan/orchestration revision compatibility. Doctor does not guess native-agent capacity: that field is reported as `UNKNOWN`, while actual slots come from the Codex runtime. Only blocking findings stop planning. An explicit external plugin root is statically inspected but treated as untrusted and never executed.
 

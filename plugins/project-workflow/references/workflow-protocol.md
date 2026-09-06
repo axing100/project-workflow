@@ -14,6 +14,18 @@
 
 ## Ownership and Precedence
 
+### Native platform commands
+
+Use a verified CPython 3.9+ interpreter available on the current host. Examples use
+`python3` for POSIX; on Windows use `py -3` or a verified `python` executable. Do not
+require WSL, Git Bash, or a `python3` alias. Quote paths, pass arguments separately,
+and use one-line commands in PowerShell instead of POSIX backslash continuation.
+Helpers use the native Windows handle/locking backend or the POSIX descriptor backend;
+never disable locks, NONE mode, or path checks to work around a capability failure.
+Read [platform-support.md](platform-support.md) for installation, filesystem limits,
+platform validation, or permission/locking failures. Native agents still require host
+collaboration capabilities; operating-system support does not create those capabilities.
+
 After Project Workflow accepts a task, it owns planning, approval, lifecycle transitions, execution coordination, and delivery state for that task. Specialized skills may assist with a bounded format, domain, test surface, or tool, but they must not:
 
 - start implementation while the plan awaits confirmation;
