@@ -206,6 +206,21 @@ Validation commands have an explicit stability class. `DISCOVERY` selects a dire
 - Execution turns may use specialized skills only within the approved task scope.
 - Do not combine this workflow with another general project planning or plan-execution skill unless the user explicitly selects the alternative.
 
+## File Editing and Handoffs
+
+- When the runtime provides `apply_patch` and the target is writable within the authorized
+  scope, prefer it for direct edits to the real source path. Do not route edits through a
+  temporary copy merely for convenience. This preference does not bypass permissions or
+  guarantee that Codex renders an end-of-turn change component.
+- If a temporary copy is necessary for isolation or permission handling, verify the files
+  after writing them back and make delivery links point to the real source paths. Clearly
+  distinguish temporary edit records from repository changes; never present a temporary
+  path or a copied patch as proof that the real repository's native diff is displayed.
+- At an implementation handoff, including a blocker or renewed approval request, briefly
+  state which real files have already changed, validation completed, and what remains
+  pending. Check the actual affected repositories; a clean conversation cwd or an empty
+  native component does not prove there were no edits. Preserve existing user changes.
+
 ## Recovery and Change Control
 
 After any restart, compaction, or handoff, rebuild state from repository documents and the approved change-evidence model rather than memory alone.
