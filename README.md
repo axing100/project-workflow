@@ -143,6 +143,14 @@ Phrases in the initial request such as “go ahead,” “finish everything,” 
 
 The router chooses `LIGHT`, `STANDARD`, or `FULL` from the inspected scope and risks. You may request a stricter profile, but an approved profile cannot be weakened without revising the plan and asking for confirmation again.
 
+## Planning Handoff Format
+
+Planning handoffs begin with one sentence explaining which Project Workflow profile was used, which task was planned, and which planning outcomes were completed. Real document links follow, each in its own bold paragraph, with a localized role label and the exact filename including its extension. A LIGHT plan with an embedded design links only to the existing plan.
+
+Next come up to three short scope and approach bullets, followed by concise validation and applicable execution or recovery notes. The response ends with one confirmation request naming the task and plan revision. Avoid manual file icons, decorative separators, repeated confirmation prompts, and claims of implementation or testing that has not happened.
+
+The opening, labels, summary, and confirmation follow the current conversation language and actual task context; they are semantic templates, not fixed wording. Filenames and machine identifiers remain unchanged. Task-state rendering still supports `zh-CN` and `en-US`, with other languages falling back to English. Existing document-directory conventions remain unchanged.
+
 ## Doctor Preflight
 
 Run the same read-only preflight directly when troubleshooting:
